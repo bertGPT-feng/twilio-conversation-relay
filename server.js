@@ -2,6 +2,7 @@ import Fastify from "fastify";
 import fastifyFormBody from "@fastify/formbody";
 import OpenAI from "openai";
 import dotenv from "dotenv";
+import fs from "fs";
 
 dotenv.config();
 

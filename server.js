@@ -27,7 +27,6 @@ const openai = new OpenAI({
 const SYSTEM_PROMPT = `你是法院通知中心的小云。永远用中文回复，每次只说1-2句话并以问题结尾。`;
 
 const sessions = new Map();
-const callLogs = new Map(); // 记录请求详情
 
 function escapeXml(s) {
   return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&apos;");
@@ -42,73 +41,86 @@ async function getAIResponse(conv) {
 const fastify = Fastify({ logger: false });
 fastify.register(fastifyFormBody);
 
-// 记录所有 POST 请求
-fastify.addHook("onRequest", async (req, reply) => {
-  if (req.method === "POST") {
-    let body = "";
-    try {
-      if (req.body) body = JSON.stringify(req.body);
-    } catch(e) {}
-    log(`[${req.method}] ${req.url} body=${body.substring(0,200)}`);
-  }
-});
+fastify.get("/health", async (req, reply) => reply.send({ ok: true }));
 
-fastify.get("/health", async (req, reply) => reply.send({ ok: true, url: BASE_URL }));
-
-// 主入口 — 先测试纯语音播放，看看呼叫是否能保持连接
+// 主入口：语音 + 按键双模式
 fastify.all("/voice", async (req, reply) => {
   const cs = req.body?.CallSid || "?";
-  log(`\n========== 来电: ${cs} ==========`);
-  log(`完整请求: ${JSON.stringify(req.body || {})}`);
+  log(`📞 来电: ${cs}`);
   sessions.set(cs, []);
-  callLogs.set(cs, []);
 
   reply.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say voice="Polly.Zhiyu" language="zh-CN">您好，这里是法院通知中心，我是小云。</Say>
   <Say voice="Polly.Zhiyu" language="zh-CN">请问您是张伟先生吗？</Say>
-  <Gather input="speech dtmf" timeout="5" numDigits="1" speechTimeout="auto" language="zh-CN" action="${BASE_URL}/gather" method="POST" enhanced="true">
-    <Say voice="Polly.Zhiyu" language="zh-CN">如果是请说「是」或按1，如果不是请说「不是」或按2。</Say>
+  <Gather input="dtmf" timeout="8" numDigits="1" action="${BASE_URL}/gather" method="POST">
+    <Say voice="Polly.Zhiyu" language="zh-CN">如果是请按1，如果不是请按2。</Say>
   </Gather>
-  <Say voice="Polly.Zhiyu" language="zh-CN">没有收到回复，再见。</Say>
+  <Say voice="Polly.Zhiyu" language="zh-CN">没有收到按键，再见。</Say>
   <Hangup/>
 </Response>`);
 });
 
+// 处理回复
 fastify.all("/gather", async (req, reply) => {
   const cs = req.body?.CallSid;
-  const speech = req.body?.SpeechResult;
   const digits = req.body?.Digits;
-  const confidence = req.body?.Confidence;
-  
-  log(`📨 回复 (${cs}): 语音="${speech}" 按键="${digits}" 置信度=${confidence}`);
-  log(`完整回调: ${JSON.stringify(req.body || {})}`);
 
-  if (!speech && !digits) {
+  // 数字 → 中文映射
+  const digitMap = {
+    "1": "是", "2": "不是", "3": "不知道",
+    "4": "好的", "5": "不好", "6": "可以",
+    "7": "明天", "8": "地址正确", "9": "地址错误",
+    "0": "转人工"
+  };
+
+  const userInput = digitMap[digits] || `按键${digits}`;
+  log(`📨 (${cs}): 按键=${digits} → "${userInput}"`);
+
+  if (!digits) {
     return reply.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Polly.Zhiyu" language="zh-CN">没听清楚，请再说一遍。</Say>
+  <Say voice="Polly.Zhiyu" language="zh-CN">没收到按键，请再按一次。</Say>
   <Redirect>${BASE_URL}/voice</Redirect>
 </Response>`);
   }
 
   const conv = sessions.get(cs) || [];
-  const userInput = speech || (digits === "1" ? "是" : digits === "2" ? "不是" : `按键${digits}`);
   conv.push({ role: "user", content: userInput });
+
+  // 检查是否要求转人工
+  if (digits === "0") {
+    return reply.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="Polly.Zhiyu" language="zh-CN">好的，我将为您转接人工服务，请稍候。</Say>
+  <Hangup/>
+</Response>`);
+  }
 
   try {
     const ai = await getAIResponse(conv);
     conv.push({ role: "assistant", content: ai });
     log(`🤖 AI: ${ai}`);
 
-    reply.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
+    // 最多对话5轮后结束
+    if (conv.length >= 10) {
+      reply.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say voice="Polly.Zhiyu" language="zh-CN">${escapeXml(ai)}</Say>
-  <Gather input="speech dtmf" timeout="5" speechTimeout="auto" language="zh-CN" action="${BASE_URL}/gather" method="POST" enhanced="true">
-    <Say voice="Polly.Zhiyu" language="zh-CN">请讲。</Say>
-  </Gather>
-  <Redirect>${BASE_URL}/voice</Redirect>
+  <Say voice="Polly.Zhiyu" language="zh-CN">感谢您的接听，再见。</Say>
+  <Hangup/>
 </Response>`);
+    } else {
+      reply.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="Polly.Zhiyu" language="zh-CN">${escapeXml(ai)}</Say>
+  <Gather input="dtmf" timeout="8" numDigits="1" action="${BASE_URL}/gather" method="POST">
+    <Say voice="Polly.Zhiyu" language="zh-CN">按1继续，按0转人工。</Say>
+  </Gather>
+  <Say voice="Polly.Zhiyu" language="zh-CN">没有收到按键，再见。</Say>
+  <Hangup/>
+</Response>`);
+    }
   } catch(err) {
     log(`❌ ${err.message}`);
     reply.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?><Response><Say>系统繁忙，再见。</Say><Hangup/></Response>`);

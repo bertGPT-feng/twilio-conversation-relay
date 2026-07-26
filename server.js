@@ -15,9 +15,12 @@ const TWILIO_AUTH = Buffer.from(
   `${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`
 ).toString("base64");
 
+const LOG_FILE = "/tmp/relay_debug.log";
+
 function log(...args) {
-  const line = `[${new Date().toISOString()}] ${args.join(" ")}`;
+  const line = `[${new Date().toISOString()}] ${args.join(' ')}`;
   console.log(...args);
+  try { fs.appendFileSync(LOG_FILE, line + String.fromCharCode(10)); } catch(e) {}
 }
 
 const openai = new OpenAI({

@@ -1,140 +1,217 @@
 import Fastify from "fastify";
 import fastifyFormBody from "@fastify/formbody";
-import OpenAI from "openai";
+import fastifyWebsocket from "@fastify/websocket";
 import dotenv from "dotenv";
 import fs from "fs";
+import OpenAI from "openai";
 
 dotenv.config();
 
-const PORT = process.env.PORT || 8080;
-const BASE_URL = process.env.DOMAIN 
-  ? `https://${process.env.DOMAIN.replace(/^https?:\/\//, '')}`
-  : `http://localhost:${PORT}`;
+const PORT = Number(process.env.PORT || 8080);
+const DOMAIN = (process.env.DOMAIN || process.env.RAILWAY_PUBLIC_DOMAIN || "")
+  .replace(/^https?:\/\//, "")
+  .replace(/\/+$/, "");
+const BASE_URL = DOMAIN ? `https://${DOMAIN}` : `http://localhost:${PORT}`;
+const WS_URL = DOMAIN ? `wss://${DOMAIN}/ws` : "";
 const LLM_MODEL = process.env.LLM_MODEL || "deepseek/deepseek-v4-flash";
-const TWILIO_AUTH = Buffer.from(
-  `${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`
-).toString("base64");
-
 const LOG_FILE = "/tmp/relay_debug.log";
 
-function log(...args) {
-  const line = `[${new Date().toISOString()}] ${args.join(' ')}`;
-  console.log(...args);
-  try { fs.appendFileSync(LOG_FILE, line + String.fromCharCode(10)); } catch(e) {}
-}
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-  baseURL: process.env.OPENAI_BASE_URL,
-});
-
-const SYSTEM_PROMPT = `你是法院通知中心的小云。永远用中文回复，每次只说1-2句话并以问题结尾。`;
+const SYSTEM_PROMPT =
+  "你是电话客服小云。永远用中文自然口语回复，每次只说一到两句话，" +
+  "不要使用 Markdown、表情或特殊符号，并在适合时用一个简短问题继续对话。";
 
 const sessions = new Map();
 
-function escapeXml(s) {
-  return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&apos;");
+function log(...args) {
+  const line = `[${new Date().toISOString()}] ${args.join(" ")}`;
+  console.log(...args);
+  try {
+    fs.appendFileSync(LOG_FILE, `${line}\n`);
+  } catch {
+    // Railway stdout remains the source of truth if the temporary file is unavailable.
+  }
 }
 
-async function getAIResponse(conv) {
-  const messages = [{ role: "system", content: SYSTEM_PROMPT }, ...conv.slice(-10)];
-  const r = await openai.chat.completions.create({ model: LLM_MODEL, messages, temperature: 0.6, max_tokens: 120 });
-  return r.choices[0].message.content.trim();
+function escapeXml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
 }
 
-async function sttElevenLabs(audioUrl) {
-  log(`⬇️ 下载录音: ${audioUrl}`);
-  const resp = await fetch(audioUrl, { headers: { Authorization: `Basic ${TWILIO_AUTH}` }});
-  if (!resp.ok) throw new Error(`下载失败: ${resp.status}`);
-  const buf = Buffer.from(await resp.arrayBuffer());
-  log(`📦 大小: ${buf.length} bytes`);
+export function conversationRelayTwiml(wsUrl = WS_URL) {
+  if (!wsUrl) throw new Error("DOMAIN or RAILWAY_PUBLIC_DOMAIN is required");
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Connect action="${escapeXml(BASE_URL)}/relay-ended">
+    <ConversationRelay
+      url="${escapeXml(wsUrl)}"
+      welcomeGreeting="您好，我是智能客服小云。请问有什么可以帮您？"
+      language="zh-CN"
+      transcriptionLanguage="zh-CN"
+      transcriptionProvider="Google"
+      ttsLanguage="zh-CN"
+      ttsProvider="Amazon"
+      voice="Zhiyu-Neural"
+      welcomeGreetingInterruptible="speech">
+    </ConversationRelay>
+  </Connect>
+</Response>`;
+}
 
-  const fd = new FormData();
-  fd.append("file", new Blob([buf], { type: "audio/wav" }), "rec.wav");
-  fd.append("model_id", "scribe_v1");
-  fd.append("language_code", "zh");
-
-  const r2 = await fetch("https://api.elevenlabs.io/v1/speech-to-text", {
-    method: "POST",
-    headers: { "xi-api-key": process.env.ELEVENLABS_API_KEY },
-    body: fd,
+function createOpenAIClient() {
+  if (!process.env.OPENAI_API_KEY) return null;
+  return new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY,
+    baseURL: process.env.OPENAI_BASE_URL,
   });
-  if (!r2.ok) throw new Error(`ElevenLabs ${r2.status}: ${await r2.text()}`);
-  const json = await r2.json();
-  log(`📝 转写: "${json.text}"`);
-  return json.text || "";
 }
 
-const fastify = Fastify({ logger: false });
-fastify.register(fastifyFormBody);
+async function getAIResponse(openai, conversation) {
+  if (!openai) throw new Error("OPENAI_API_KEY 未配置");
+  const response = await openai.chat.completions.create({
+    model: LLM_MODEL,
+    messages: [{ role: "system", content: SYSTEM_PROMPT }, ...conversation.slice(-10)],
+    temperature: 0.6,
+    max_tokens: 120,
+  });
+  const text = response.choices[0]?.message?.content?.trim();
+  if (!text) throw new Error("LLM 返回空内容");
+  return text;
+}
 
-fastify.get("/health", async (req, reply) => reply.send({ ok: true }));
+export function buildServer({ openai = createOpenAIClient() } = {}) {
+  const fastify = Fastify({ logger: false });
+  fastify.register(fastifyFormBody);
+  fastify.register(fastifyWebsocket);
 
-// 查看最近日志
-fastify.get("/logs", async (req, reply) => {
-  try {
-    const lines = fs.readFileSync(LOG_FILE, "utf-8").split("\n").filter(Boolean).slice(-30);
-    reply.type("text/plain").send(lines.join("\n"));
-  } catch(e) {
-    reply.send({ error: e.message });
-  }
-});
+  fastify.get("/health", async () => ({
+    ok: true,
+    mode: "conversation-relay",
+    websocket: Boolean(WS_URL),
+  }));
 
-// 接听 → 问候 + 录音
-fastify.all("/voice", async (req, reply) => {
-  const cs = req.body?.CallSid || "?";
-  log(`📞 来电: ${cs}`);
-  sessions.set(cs, []);
-
-  reply.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Say voice="Polly.Zhiyu" language="zh-CN">您好，这里是法院通知中心，我是小云。</Say>
-  <Say voice="Polly.Zhiyu" language="zh-CN">请问您是张伟先生吗？听到叮一声后请说话。</Say>
-  <Record action="${BASE_URL}/transcribe" method="POST" maxLength="8" timeout="5" playBeep="true" transcribe="false" />
-  <Redirect>${BASE_URL}/voice</Redirect>
-</Response>`);
-});
-
-// 转写 + AI 回复
-fastify.all("/transcribe", async (req, reply) => {
-  const cs = req.body?.CallSid;
-  const url = req.body?.RecordingUrl;
-
-  log(`📨 录音: ${cs} ${url}`);
-
-  if (!url) {
-    return reply.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
-<Response><Say voice="Polly.Zhiyu">没听到，请再说一遍。</Say><Redirect>${BASE_URL}/voice</Redirect></Response>`);
-  }
-
-  try {
-    const text = await sttElevenLabs(url);
-    if (!text.trim()) {
-      return reply.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
-<Response><Say voice="Polly.Zhiyu">没听清楚，请再说一遍。</Say><Redirect>${BASE_URL}/voice</Redirect></Response>`);
+  fastify.get("/logs", async (_request, reply) => {
+    try {
+      const lines = fs
+        .readFileSync(LOG_FILE, "utf8")
+        .split("\n")
+        .filter(Boolean)
+        .slice(-80);
+      return reply.type("text/plain").send(lines.join("\n"));
+    } catch {
+      return reply.type("text/plain").send("");
     }
+  });
 
-    const conv = sessions.get(cs) || [];
-    conv.push({ role: "user", content: text });
+  const voiceHandler = async (_request, reply) => {
+    try {
+      return reply.type("text/xml").send(conversationRelayTwiml());
+    } catch (error) {
+      log("❌ TwiML:", error.message);
+      return reply.status(500).type("text/plain").send(error.message);
+    }
+  };
+  fastify.all("/voice", voiceHandler);
+  fastify.all("/twiml", voiceHandler);
 
-    const ai = await getAIResponse(conv);
-    conv.push({ role: "assistant", content: ai });
-    log(`🤖 AI: ${ai}`);
+  fastify.all("/relay-ended", async (request, reply) => {
+    log("🔚 Relay结束:", request.body?.CallSid || "?", request.body?.ConnectStatus || "");
+    return reply.type("text/xml").send(
+      '<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>',
+    );
+  });
 
-    reply.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Say voice="Polly.Zhiyu" language="zh-CN">${escapeXml(ai)}</Say>
-  <Record action="${BASE_URL}/transcribe" method="POST" maxLength="8" timeout="5" playBeep="true" transcribe="false" />
-  <Redirect>${BASE_URL}/voice</Redirect>
-</Response>`);
-  } catch (err) {
-    log(`❌ 错误: ${err.message} ${err.stack?.substring(0,200) || ""}`);
-    reply.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
-<Response><Say voice="Polly.Zhiyu">系统正忙，请稍后再试。</Say><Hangup/></Response>`);
+  fastify.all("/call-status", async (request, reply) => {
+    log("📊 通话状态:", request.body?.CallSid || "?", request.body?.CallStatus || "");
+    return reply.status(204).send();
+  });
+
+  fastify.register(async function websocketRoutes(instance) {
+    instance.get("/ws", { websocket: true }, (socket) => {
+      let callSid = null;
+      let responseInFlight = false;
+      log("🔌 WebSocket连接");
+
+      socket.on("message", async (data) => {
+        try {
+          const message = JSON.parse(data.toString());
+
+          if (message.type === "setup") {
+            callSid = message.callSid;
+            sessions.set(callSid, []);
+            log("📞 Relay通话:", callSid || "?");
+            return;
+          }
+
+          if (message.type === "prompt") {
+            if (message.last === false || responseInFlight) return;
+            const userText = String(message.voicePrompt || "").trim();
+            if (!userText || !callSid) return;
+
+            const conversation = sessions.get(callSid) || [];
+            sessions.set(callSid, conversation);
+            conversation.push({ role: "user", content: userText });
+            log("🗣️ 用户:", userText);
+            responseInFlight = true;
+
+            try {
+              const answer = await getAIResponse(openai, conversation);
+              conversation.push({ role: "assistant", content: answer });
+              log("🤖 AI:", answer);
+              if (socket.readyState === 1) {
+                socket.send(
+                  JSON.stringify({
+                    type: "text",
+                    token: answer,
+                    last: true,
+                    interruptible: true,
+                  }),
+                );
+              }
+            } catch (error) {
+              log("❌ LLM:", error.message);
+              if (socket.readyState === 1) {
+                socket.send(
+                  JSON.stringify({
+                    type: "text",
+                    token: "抱歉，系统暂时无法回答，请稍后再试。",
+                    last: true,
+                  }),
+                );
+              }
+            } finally {
+              responseInFlight = false;
+            }
+            return;
+          }
+
+          if (message.type === "interrupt") log("⏸️ 用户打断");
+          if (message.type === "error") log("❌ Relay:", message.description || "未知错误");
+        } catch (error) {
+          log("❌ WebSocket消息:", error.message);
+        }
+      });
+
+      socket.on("close", () => {
+        log("🔌 WebSocket断开:", callSid || "?");
+        if (callSid) sessions.delete(callSid);
+      });
+    });
+  });
+
+  return fastify;
+}
+
+if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) {
+  const fastify = buildServer();
+  try {
+    await fastify.listen({ port: PORT, host: "0.0.0.0" });
+    log("✅ 已启动:", BASE_URL, "mode=conversation-relay");
+  } catch (error) {
+    console.error(error);
+    process.exit(1);
   }
-});
-
-try {
-  await fastify.listen({ port: PORT, host: "0.0.0.0" });
-  log(`✅ ${BASE_URL}`);
-} catch(e) { console.error(e); process.exit(1); }
+}

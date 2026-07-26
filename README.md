@@ -1,6 +1,6 @@
-# Twilio Conversation Relay AI 语音客服
+# Twilio ConversationRelay AI 语音客服
 
-基于 Twilio Conversation Relay + LLM 的实时 AI 语音客服系统。
+Twilio 负责实时中文语音识别和语音合成，Railway WebSocket 调用 LLM 生成客服回复。
 
 ## Railway 一键部署
 
@@ -27,9 +27,10 @@ git push -u origin main
 | `OPENAI_API_KEY` | `你的OpenRouter API Key` |
 | `OPENAI_BASE_URL` | `https://openrouter.ai/api/v1` |
 | `LLM_MODEL` | `deepseek/deepseek-v4-flash` |
+| `DOMAIN` | Railway 生成的公网域名，不含路径 |
 
 4. Railway 自动部署后，会生成一个域名如 `https://你的应用.up.railway.app`
-5. **这个域名会自动注入到 `DOMAIN` 环境变量中，无需手动设置**
+5. 建议明确设置 `DOMAIN`；未设置时程序会回退使用 Railway 的 `RAILWAY_PUBLIC_DOMAIN`
 
 ### 3. 配置 Twilio
 
@@ -39,12 +40,13 @@ git push -u origin main
 2. 选择你的号码（+12566188927）
 3. 在 **Voice Configuration** 中：
    - **当有来电时**: Webhook
-   - **URL**: `https://你的railway域名/twiml`
+   - **URL**: `https://你的railway域名/voice`
    - **HTTP 方法**: POST
 
 ### 4. 测试
 
-拨打你的 Twilio 号码，AI 客服会接听电话。
+拨打你的 Twilio 号码后，ConversationRelay 会把用户语音实时转成文字并通过
+WebSocket 发送给本服务；服务返回的 LLM 文本由 Twilio 播放。
 
 ## 本地开发
 
@@ -59,7 +61,7 @@ cp .env.example .env
 # 启动
 node server.js
 
-# 用 ngrok 暴露本地服务
+# 用 ngrok 等 HTTPS 隧道暴露本地服务，并把 DOMAIN 设置为公网域名
 ngrok http 8080
 ```
 

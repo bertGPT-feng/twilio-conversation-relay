@@ -4,9 +4,12 @@
   "description": "Twilio Conversation Relay AI 语音客服系统",
   "main": "server.js",
   "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "start": "node server.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --test"
   },
   "keywords": ["twilio", "conversation-relay", "voice", "ai"],
   "author": "",

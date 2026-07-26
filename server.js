@@ -114,7 +114,7 @@ fastify.all("/transcribe", async (req, reply) => {
   <Redirect>${BASE_URL}/voice</Redirect>
 </Response>`);
   } catch (err) {
-    log(`❌ ${err.message}`);
+    log(`❌ 错误: ${err.message} ${err.stack?.substring(0,200) || ""}`);
     reply.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response><Say voice="Polly.Zhiyu">系统正忙，请稍后再试。</Say><Hangup/></Response>`);
   }

@@ -24,9 +24,14 @@ const openai = new OpenAI({
   baseURL: process.env.OPENAI_BASE_URL,
 });
 
-const SYSTEM_PROMPT = `你是"法院通知中心"的 AI 语音客服，名叫小云。永远用中文回复，每次只说1-2句话并以问题结尾。`;
+const SYSTEM_PROMPT = `你是法院通知中心的小云。永远用中文回复，每次只说1-2句话并以问题结尾。`;
 
 const sessions = new Map();
+const callLogs = new Map(); // 记录请求详情
+
+function escapeXml(s) {
+  return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&apos;");
+}
 
 async function getAIResponse(conv) {
   const messages = [{ role: "system", content: SYSTEM_PROMPT }, ...conv.slice(-10)];
@@ -37,22 +42,35 @@ async function getAIResponse(conv) {
 const fastify = Fastify({ logger: false });
 fastify.register(fastifyFormBody);
 
+// 记录所有 POST 请求
+fastify.addHook("onRequest", async (req, reply) => {
+  if (req.method === "POST") {
+    let body = "";
+    try {
+      if (req.body) body = JSON.stringify(req.body);
+    } catch(e) {}
+    log(`[${req.method}] ${req.url} body=${body.substring(0,200)}`);
+  }
+});
+
 fastify.get("/health", async (req, reply) => reply.send({ ok: true, url: BASE_URL }));
 
-// 测试1: 只播放语音，不用语音识别
+// 主入口 — 先测试纯语音播放，看看呼叫是否能保持连接
 fastify.all("/voice", async (req, reply) => {
   const cs = req.body?.CallSid || "?";
-  log(`📞 来电: ${cs}`);
+  log(`\n========== 来电: ${cs} ==========`);
+  log(`完整请求: ${JSON.stringify(req.body || {})}`);
   sessions.set(cs, []);
+  callLogs.set(cs, []);
 
   reply.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Google.zh-CN-Wavenet-C" language="zh-CN">您好，这里是法院通知中心，我是小云。</Say>
-  <Say voice="Google.zh-CN-Wavenet-C" language="zh-CN">请问您是张伟先生吗？</Say>
-  <Gather input="speech" timeout="5" speechTimeout="auto" language="zh-CN" action="${BASE_URL}/gather" method="POST">
-    <Say voice="Google.zh-CN-Wavenet-C">请回答。</Say>
+  <Say voice="Polly.Zhiyu" language="zh-CN">您好，这里是法院通知中心，我是小云。</Say>
+  <Say voice="Polly.Zhiyu" language="zh-CN">请问您是张伟先生吗？</Say>
+  <Gather input="speech dtmf" timeout="5" numDigits="1" speechTimeout="auto" language="zh-CN" action="${BASE_URL}/gather" method="POST" enhanced="true">
+    <Say voice="Polly.Zhiyu" language="zh-CN">如果是请说「是」或按1，如果不是请说「不是」或按2。</Say>
   </Gather>
-  <Say voice="Google.zh-CN-Wavenet-C">没有收到回复，再见。</Say>
+  <Say voice="Polly.Zhiyu" language="zh-CN">没有收到回复，再见。</Say>
   <Hangup/>
 </Response>`);
 });
@@ -60,48 +78,42 @@ fastify.all("/voice", async (req, reply) => {
 fastify.all("/gather", async (req, reply) => {
   const cs = req.body?.CallSid;
   const speech = req.body?.SpeechResult;
-  log(`🗣️ (${cs}): ${speech}`);
+  const digits = req.body?.Digits;
+  const confidence = req.body?.Confidence;
+  
+  log(`📨 回复 (${cs}): 语音="${speech}" 按键="${digits}" 置信度=${confidence}`);
+  log(`完整回调: ${JSON.stringify(req.body || {})}`);
 
-  if (!speech) {
-    return reply.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?><Response><Redirect>${BASE_URL}/voice</Redirect></Response>`);
+  if (!speech && !digits) {
+    return reply.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="Polly.Zhiyu" language="zh-CN">没听清楚，请再说一遍。</Say>
+  <Redirect>${BASE_URL}/voice</Redirect>
+</Response>`);
   }
 
   const conv = sessions.get(cs) || [];
-  conv.push({ role: "user", content: speech });
+  const userInput = speech || (digits === "1" ? "是" : digits === "2" ? "不是" : `按键${digits}`);
+  conv.push({ role: "user", content: userInput });
 
   try {
     const ai = await getAIResponse(conv);
     conv.push({ role: "assistant", content: ai });
     log(`🤖 AI: ${ai}`);
 
-    // 如果是第一次回复，继续对话
-    if (conv.length < 4) {
-      reply.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
+    reply.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Google.zh-CN-Wavenet-C" language="zh-CN">${escapeXml(ai)}</Say>
-  <Gather input="speech" timeout="5" speechTimeout="auto" language="zh-CN" action="${BASE_URL}/gather" method="POST">
-    <Say voice="Google.zh-CN-Wavenet-C">请讲。</Say>
+  <Say voice="Polly.Zhiyu" language="zh-CN">${escapeXml(ai)}</Say>
+  <Gather input="speech dtmf" timeout="5" speechTimeout="auto" language="zh-CN" action="${BASE_URL}/gather" method="POST" enhanced="true">
+    <Say voice="Polly.Zhiyu" language="zh-CN">请讲。</Say>
   </Gather>
   <Redirect>${BASE_URL}/voice</Redirect>
 </Response>`);
-    } else {
-      // 对话结束
-      reply.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Say voice="Google.zh-CN-Wavenet-C" language="zh-CN">${escapeXml(ai)}</Say>
-  <Say voice="Google.zh-CN-Wavenet-C" language="zh-CN">感谢您的接听，稍后会有工作人员与您联系。再见。</Say>
-  <Hangup/>
-</Response>`);
-    }
   } catch(err) {
     log(`❌ ${err.message}`);
     reply.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?><Response><Say>系统繁忙，再见。</Say><Hangup/></Response>`);
   }
 });
-
-function escapeXml(s) {
-  return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&apos;");
-}
 
 try {
   await fastify.listen({ port: PORT, host: "0.0.0.0" });

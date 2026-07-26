@@ -52,6 +52,7 @@ export function conversationRelayTwiml(wsUrl = WS_URL) {
       language="zh-CN"
       transcriptionLanguage="zh-CN"
       transcriptionProvider="Google"
+      speechModel="long"
       ttsLanguage="zh-CN"
       ttsProvider="Amazon"
       voice="Zhiyu-Neural"

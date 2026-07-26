@@ -7,16 +7,23 @@ import fs from "fs";
 
 dotenv.config();
 
-// ── 端口与域名 ───────────────────────────────────
+// ── 端口 ─────────────────────────────────────────
 const PORT = process.env.PORT || 8080;
-// Railway 会自动提供 RAILWAY_PUBLIC_DOMAIN
-const rawDomain = process.env.DOMAIN || process.env.RAILWAY_PUBLIC_DOMAIN;
-if (!rawDomain) {
-  console.error("❌ 缺少 DOMAIN 环境变量！部署后请设置 DOMAIN = 你的 Railway 应用域名");
-  process.exit(1);
+
+// ── 域名（用于 Twilio WebSocket） ────────────────
+// Railway 不会自动设置 DOMAIN，需要你在后台手动填入
+// 变量名: DOMAIN ，值: 你的 Railway 应用域名（如 xxx.up.railway.app）
+const DOMAIN = process.env.DOMAIN;
+if (DOMAIN) {
+  console.log(`✅ DOMAIN 已配置: ${DOMAIN}`);
+} else {
+  console.warn("⚠️ DOMAIN 未设置 — Twilio 无法连接。部署完成后在 Railway 后台添加 DOMAIN 环境变量");
+  console.warn("   变量名: DOMAIN");
+  console.warn("   值   : 你的 Railway 应用域名（如 xxx.up.railway.app，去掉 https://）");
 }
-const DOMAIN = rawDomain.replace(/^https?:\/\//, ""); // 去掉协议前缀
-const WS_URL = `wss://${DOMAIN}/ws`;
+
+const cleanDomain = DOMAIN ? DOMAIN.replace(/^https?:\/\//, "") : null;
+const WS_URL = cleanDomain ? `wss://${cleanDomain}/ws` : null;
 const LLM_MODEL = process.env.LLM_MODEL || "deepseek/deepseek-v4-flash";
 
 // ── 日志 ─────────────────────────────────────────
@@ -30,7 +37,8 @@ function log(...args) {
 }
 
 // ── 欢迎语 ───────────────────────────────────────
-const WELCOME_GREETING = "您好，这里是法院通知中心。我是小云，请问您是张伟先生吗？";
+const WELCOME_GREETING =
+  "您好，这里是法院通知中心。我是小云，请问您是张伟先生吗？";
 
 // ── 系统提示词 ───────────────────────────────────
 const SYSTEM_PROMPT = `你是"法院通知中心"的 AI 语音客服，名叫小云。
@@ -78,13 +86,22 @@ const fastify = Fastify({ logger: false });
 fastify.register(fastifyWs);
 fastify.register(fastifyFormBody);
 
+// 健康检查端点 — Railway 会用它检测服务是否在线
+fastify.get("/health", async (request, reply) => {
+  reply.send({ status: "ok", domain: cleanDomain || "not set" });
+});
+
 // TwiML 端点
 fastify.all("/twiml", async (request, reply) => {
+  if (!cleanDomain) {
+    reply.status(500).type("text/plain").send("DOMAIN 未配置，无法生成 TwiML");
+    return;
+  }
   reply.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
     <ConversationRelay
-      url="${WS_URL}"
+      url="wss://${cleanDomain}/ws"
       welcomeGreeting="${WELCOME_GREETING}"
       voice="Google.zh-CN-Wavenet-C" />
   </Connect>
@@ -174,8 +191,7 @@ try {
 ╔══════════════════════════════════════╗
 ║  Twilio Conversation Relay 已启动    ║
 ║  端口: ${PORT}                       ║
-║  WebSocket: ${WS_URL}               ║
-║  TwiML: https://${DOMAIN}/twiml     ║
+${cleanDomain ? `║  WebSocket: wss://${cleanDomain}/ws   ║` : `║  ⚠️  DOMAIN 未配置                    ║`}
 ╚══════════════════════════════════════╝
   `);
 } catch (err) {

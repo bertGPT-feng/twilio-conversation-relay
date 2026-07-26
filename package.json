@@ -1,0 +1,21 @@
+{
+  "name": "conversation-relay",
+  "version": "1.0.0",
+  "description": "Twilio Conversation Relay AI 语音客服系统",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": ["twilio", "conversation-relay", "voice", "ai"],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@fastify/formbody": "^8.0.2",
+    "@fastify/websocket": "^11.3.0",
+    "dotenv": "^17.4.2",
+    "fastify": "^5.10.0",
+    "openai": "^6.49.0"
+  }
+}

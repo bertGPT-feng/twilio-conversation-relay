@@ -3,7 +3,6 @@ import fastifyFormBody from "@fastify/formbody";
 import OpenAI from "openai";
 import dotenv from "dotenv";
 import fs from "fs";
-import { Readable } from "stream";
 
 dotenv.config();
 
@@ -16,7 +15,11 @@ const LOG_FILE = "/tmp/relay_debug.log";
 
 const TWILIO_SID = process.env.TWILIO_ACCOUNT_SID;
 const TWILIO_TOKEN = process.env.TWILIO_AUTH_TOKEN;
-const TWILIO_AUTH = Buffer.from(`${TWILIO_SID}:${TWILIO_TOKEN}`).toString("base64");
+const TWILIO_AUTH = TWILIO_SID && TWILIO_TOKEN
+  ? Buffer.from(`${TWILIO_SID}:${TWILIO_TOKEN}`).toString("base64")
+  : null;
+
+const ELEVENLABS_KEY = process.env.ELEVENLABS_API_KEY;
 
 function log(...args) {
   const line = `[${new Date().toISOString()}] ${args.join(" ")}`;
@@ -24,7 +27,6 @@ function log(...args) {
   try { fs.appendFileSync(LOG_FILE, line + "\n"); } catch (_) {}
 }
 
-// OpenAI 客户端（用于 DeepSeek）
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
   baseURL: process.env.OPENAI_BASE_URL,
@@ -44,11 +46,11 @@ async function getAIResponse(conv) {
   return r.choices[0].message.content.trim();
 }
 
-// 用 Whisper 转写语音
+// ElevenLabs 语音转文字
 async function transcribeAudio(audioUrl) {
   log(`⬇️ 下载录音: ${audioUrl}`);
-  
-  // 从 Twilio 下载录音文件
+
+  // 从 Twilio 下载录音
   const resp = await fetch(audioUrl, {
     headers: { "Authorization": `Basic ${TWILIO_AUTH}` }
   });
@@ -56,38 +58,36 @@ async function transcribeAudio(audioUrl) {
   const audioBuffer = Buffer.from(await resp.arrayBuffer());
   log(`📦 录音大小: ${audioBuffer.length} bytes`);
 
-  // 用 OpenRouter Whisper 转写
+  // ElevenLabs STT
   const formData = new FormData();
   const blob = new Blob([audioBuffer], { type: "audio/wav" });
   formData.append("file", blob, "recording.wav");
-  formData.append("model", "openai/whisper-1");
+  formData.append("model_id", "scribe_v1");
   formData.append("language", "zh");
 
-  const whisperResp = await fetch("https://openrouter.ai/api/v1/audio/transcriptions", {
+  const sttResp = await fetch("https://api.elevenlabs.io/v1/speech-to-text", {
     method: "POST",
-    headers: {
-      "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
-    },
+    headers: { "xi-api-key": ELEVENLABS_KEY },
     body: formData,
   });
 
-  if (!whisperResp.ok) {
-    const errText = await whisperResp.text();
-    throw new Error(`Whisper 失败: ${whisperResp.status} ${errText}`);
+  if (!sttResp.ok) {
+    const errText = await sttResp.text();
+    throw new Error(`ElevenLabs STT 失败: ${sttResp.status} ${errText}`);
   }
 
-  const result = await whisperResp.json();
-  log(`📝 转写结果: "${result.text}"`);
-  return result.text;
+  const result = await sttResp.json();
+  const text = result.text || "";
+  log(`📝 转写结果: "${text}"`);
+  return text;
 }
 
-// ── Fastify 服务 ──────────────────────────────────
 const fastify = Fastify({ logger: false });
 fastify.register(fastifyFormBody);
 
 fastify.get("/health", async (req, reply) => reply.send({ ok: true }));
 
-// 接听电话：打招呼 + 开始录音
+// 接听电话
 fastify.all("/voice", async (req, reply) => {
   const cs = req.body?.CallSid || "?";
   log(`📞 来电: ${cs}`);
@@ -100,7 +100,7 @@ fastify.all("/voice", async (req, reply) => {
   <Record
     action="${BASE_URL}/transcribe"
     method="POST"
-    maxLength="10"
+    maxLength="8"
     timeout="5"
     playBeep="true"
     transcribe="false" />
@@ -108,16 +108,14 @@ fastify.all("/voice", async (req, reply) => {
 </Response>`);
 });
 
-// 处理录音并转写
+// 处理录音
 fastify.all("/transcribe", async (req, reply) => {
   const cs = req.body?.CallSid;
   const recordingUrl = req.body?.RecordingUrl;
-  const recordingSid = req.body?.RecordingSid;
 
-  log(`📨 录音回调(${cs}): SID=${recordingSid} URL=${recordingUrl}`);
+  log(`📨 录音回调(${cs}): ${recordingUrl}`);
 
   if (!recordingUrl) {
-    log(`⚠️ 没有录音`);
     return reply.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say voice="Polly.Zhiyu" language="zh-CN">没有听到您说话，请回答。</Say>
@@ -126,9 +124,9 @@ fastify.all("/transcribe", async (req, reply) => {
   }
 
   try {
-    // 1. Whisper 转写
+    // 1. ElevenLabs 语音转文字
     const transcript = await transcribeAudio(recordingUrl);
-    
+
     if (!transcript || transcript.trim().length === 0) {
       return reply.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -153,7 +151,7 @@ fastify.all("/transcribe", async (req, reply) => {
   <Record
     action="${BASE_URL}/transcribe"
     method="POST"
-    maxLength="10"
+    maxLength="8"
     timeout="5"
     playBeep="true"
     transcribe="false" />

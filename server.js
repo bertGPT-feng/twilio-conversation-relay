@@ -3,6 +3,7 @@ import fastifyFormBody from "@fastify/formbody";
 import OpenAI from "openai";
 import dotenv from "dotenv";
 import fs from "fs";
+import { Readable } from "stream";
 
 dotenv.config();
 
@@ -13,12 +14,17 @@ const BASE_URL = process.env.DOMAIN
 const LLM_MODEL = process.env.LLM_MODEL || "deepseek/deepseek-v4-flash";
 const LOG_FILE = "/tmp/relay_debug.log";
 
+const TWILIO_SID = process.env.TWILIO_ACCOUNT_SID;
+const TWILIO_TOKEN = process.env.TWILIO_AUTH_TOKEN;
+const TWILIO_AUTH = Buffer.from(`${TWILIO_SID}:${TWILIO_TOKEN}`).toString("base64");
+
 function log(...args) {
   const line = `[${new Date().toISOString()}] ${args.join(" ")}`;
   console.log(...args);
   try { fs.appendFileSync(LOG_FILE, line + "\n"); } catch (_) {}
 }
 
+// OpenAI 客户端（用于 DeepSeek）
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
   baseURL: process.env.OPENAI_BASE_URL,
@@ -38,12 +44,50 @@ async function getAIResponse(conv) {
   return r.choices[0].message.content.trim();
 }
 
+// 用 Whisper 转写语音
+async function transcribeAudio(audioUrl) {
+  log(`⬇️ 下载录音: ${audioUrl}`);
+  
+  // 从 Twilio 下载录音文件
+  const resp = await fetch(audioUrl, {
+    headers: { "Authorization": `Basic ${TWILIO_AUTH}` }
+  });
+  if (!resp.ok) throw new Error(`下载失败: ${resp.status}`);
+  const audioBuffer = Buffer.from(await resp.arrayBuffer());
+  log(`📦 录音大小: ${audioBuffer.length} bytes`);
+
+  // 用 OpenRouter Whisper 转写
+  const formData = new FormData();
+  const blob = new Blob([audioBuffer], { type: "audio/wav" });
+  formData.append("file", blob, "recording.wav");
+  formData.append("model", "openai/whisper-1");
+  formData.append("language", "zh");
+
+  const whisperResp = await fetch("https://openrouter.ai/api/v1/audio/transcriptions", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
+    },
+    body: formData,
+  });
+
+  if (!whisperResp.ok) {
+    const errText = await whisperResp.text();
+    throw new Error(`Whisper 失败: ${whisperResp.status} ${errText}`);
+  }
+
+  const result = await whisperResp.json();
+  log(`📝 转写结果: "${result.text}"`);
+  return result.text;
+}
+
+// ── Fastify 服务 ──────────────────────────────────
 const fastify = Fastify({ logger: false });
 fastify.register(fastifyFormBody);
 
 fastify.get("/health", async (req, reply) => reply.send({ ok: true }));
 
-// 主入口：语音 + 按键双模式
+// 接听电话：打招呼 + 开始录音
 fastify.all("/voice", async (req, reply) => {
   const cs = req.body?.CallSid || "?";
   log(`📞 来电: ${cs}`);
@@ -52,82 +96,81 @@ fastify.all("/voice", async (req, reply) => {
   reply.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say voice="Polly.Zhiyu" language="zh-CN">您好，这里是法院通知中心，我是小云。</Say>
-  <Say voice="Polly.Zhiyu" language="zh-CN">请问您是张伟先生吗？</Say>
-  <Gather input="dtmf" timeout="8" numDigits="1" action="${BASE_URL}/gather" method="POST">
-    <Say voice="Polly.Zhiyu" language="zh-CN">如果是请按1，如果不是请按2。</Say>
-  </Gather>
-  <Say voice="Polly.Zhiyu" language="zh-CN">没有收到按键，再见。</Say>
-  <Hangup/>
+  <Say voice="Polly.Zhiyu" language="zh-CN">请问您是张伟先生吗？请说话回答。</Say>
+  <Record
+    action="${BASE_URL}/transcribe"
+    method="POST"
+    maxLength="10"
+    timeout="5"
+    playBeep="true"
+    transcribe="false" />
+  <Redirect>${BASE_URL}/voice</Redirect>
 </Response>`);
 });
 
-// 处理回复
-fastify.all("/gather", async (req, reply) => {
+// 处理录音并转写
+fastify.all("/transcribe", async (req, reply) => {
   const cs = req.body?.CallSid;
-  const digits = req.body?.Digits;
+  const recordingUrl = req.body?.RecordingUrl;
+  const recordingSid = req.body?.RecordingSid;
 
-  // 数字 → 中文映射
-  const digitMap = {
-    "1": "是", "2": "不是", "3": "不知道",
-    "4": "好的", "5": "不好", "6": "可以",
-    "7": "明天", "8": "地址正确", "9": "地址错误",
-    "0": "转人工"
-  };
+  log(`📨 录音回调(${cs}): SID=${recordingSid} URL=${recordingUrl}`);
 
-  const userInput = digitMap[digits] || `按键${digits}`;
-  log(`📨 (${cs}): 按键=${digits} → "${userInput}"`);
-
-  if (!digits) {
+  if (!recordingUrl) {
+    log(`⚠️ 没有录音`);
     return reply.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Polly.Zhiyu" language="zh-CN">没收到按键，请再按一次。</Say>
+  <Say voice="Polly.Zhiyu" language="zh-CN">没有听到您说话，请回答。</Say>
   <Redirect>${BASE_URL}/voice</Redirect>
 </Response>`);
   }
 
-  const conv = sessions.get(cs) || [];
-  conv.push({ role: "user", content: userInput });
-
-  // 检查是否要求转人工
-  if (digits === "0") {
-    return reply.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Say voice="Polly.Zhiyu" language="zh-CN">好的，我将为您转接人工服务，请稍候。</Say>
-  <Hangup/>
-</Response>`);
-  }
-
   try {
+    // 1. Whisper 转写
+    const transcript = await transcribeAudio(recordingUrl);
+    
+    if (!transcript || transcript.trim().length === 0) {
+      return reply.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="Polly.Zhiyu" language="zh-CN">没听清楚，请再说一遍。</Say>
+  <Redirect>${BASE_URL}/voice</Redirect>
+</Response>`);
+    }
+
+    // 2. 保存对话
+    const conv = sessions.get(cs) || [];
+    conv.push({ role: "user", content: transcript });
+
+    // 3. DeepSeek 回复
     const ai = await getAIResponse(conv);
     conv.push({ role: "assistant", content: ai });
     log(`🤖 AI: ${ai}`);
 
-    // 最多对话5轮后结束
-    if (conv.length >= 10) {
-      reply.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
+    // 4. 返回回复 + 继续录音
+    reply.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say voice="Polly.Zhiyu" language="zh-CN">${escapeXml(ai)}</Say>
-  <Say voice="Polly.Zhiyu" language="zh-CN">感谢您的接听，再见。</Say>
-  <Hangup/>
+  <Record
+    action="${BASE_URL}/transcribe"
+    method="POST"
+    maxLength="10"
+    timeout="5"
+    playBeep="true"
+    transcribe="false" />
+  <Redirect>${BASE_URL}/voice</Redirect>
 </Response>`);
-    } else {
-      reply.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
+
+  } catch (err) {
+    log(`❌ 错误: ${err.message}`);
+    reply.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Polly.Zhiyu" language="zh-CN">${escapeXml(ai)}</Say>
-  <Gather input="dtmf" timeout="8" numDigits="1" action="${BASE_URL}/gather" method="POST">
-    <Say voice="Polly.Zhiyu" language="zh-CN">按1继续，按0转人工。</Say>
-  </Gather>
-  <Say voice="Polly.Zhiyu" language="zh-CN">没有收到按键，再见。</Say>
+  <Say voice="Polly.Zhiyu" language="zh-CN">系统正忙，请稍后再试。</Say>
   <Hangup/>
 </Response>`);
-    }
-  } catch(err) {
-    log(`❌ ${err.message}`);
-    reply.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?><Response><Say>系统繁忙，再见。</Say><Hangup/></Response>`);
   }
 });
 
 try {
   await fastify.listen({ port: PORT, host: "0.0.0.0" });
-  log(`✅ ${BASE_URL}`);
+  log(`✅ AI 语音客服启动 (${BASE_URL})`);
 } catch(e) { console.error(e); process.exit(1); }

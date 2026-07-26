@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildServer, conversationRelayTwiml } from "./server.js";
+import { buildServer, conversationRelayTwiml, SYSTEM_PROMPT } from "./server.js";
 
 test("generates Chinese ConversationRelay TwiML without ElevenLabs", () => {
   const xml = conversationRelayTwiml("wss://relay.example.test/ws");
@@ -11,6 +11,15 @@ test("generates Chinese ConversationRelay TwiML without ElevenLabs", () => {
   assert.match(xml, /ttsProvider="Amazon"/);
   assert.match(xml, /voice="Zhiyu-Neural"/);
   assert.doesNotMatch(xml, /ElevenLabs/i);
+  assert.match(xml, /法院通知中心的AI演示客服/);
+});
+
+test("system prompt preserves the configured role and safety boundaries", () => {
+  assert.match(SYSTEM_PROMPT, /法院通知中心/);
+  assert.match(SYSTEM_PROMPT, /张伟/);
+  assert.match(SYSTEM_PROMPT, /（2026）京01民初123号/);
+  assert.match(SYSTEM_PROMPT, /AI 演示客服/);
+  assert.match(SYSTEM_PROMPT, /不要求转账或付款/);
 });
 
 test("health identifies the active ConversationRelay mode", async () => {
@@ -35,6 +44,7 @@ test("ConversationRelay prompt reaches the LLM and returns a text token", async 
     chat: {
       completions: {
         create: async ({ messages }) => {
+          assert.match(messages[0].content, /法院通知中心/);
           assert.equal(messages.at(-1).content, "你好");
           return { choices: [{ message: { content: "您好，请问需要什么帮助？" } }] };
         },

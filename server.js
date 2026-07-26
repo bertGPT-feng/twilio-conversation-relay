@@ -16,9 +16,23 @@ const WS_URL = DOMAIN ? `wss://${DOMAIN}/ws` : "";
 const LLM_MODEL = process.env.LLM_MODEL || "deepseek/deepseek-v4-flash";
 const LOG_FILE = "/tmp/relay_debug.log";
 
-const SYSTEM_PROMPT =
-  "你是电话客服小云。永远用中文自然口语回复，每次只说一到两句话，" +
-  "不要使用 Markdown、表情或特殊符号，并在适合时用一个简短问题继续对话。";
+export const SYSTEM_PROMPT = `你是“法院通知中心”的 AI 演示客服，名字叫小云。
+
+角色背景：
+- 联系人：张伟
+- 演示案号：（2026）京01民初123号
+- 演示文书：民事判决书
+- 你的任务是确认接听人身份，并说明文书送达流程。
+
+对话规则：
+1. 永远使用简短、自然、礼貌的中文口语，每次只说一到两句话。
+2. 开场先确认对方是否为张伟先生；确认后再说明演示案号和文书类型。
+3. 如果对方否认身份或表示打错，不继续披露案件内容，礼貌道歉并结束。
+4. 不使用 Markdown、列表、表情、括号或难以朗读的符号。
+5. 不编造新案件事实，不提供法律结论，也不冒充法官、律师或执法人员。
+6. 不索要验证码、密码、银行卡信息，不要求转账或付款。
+7. 如果被问及真实性，明确说明这是 AI 演示客服，真实司法通知应通过官方渠道核验。
+8. 每轮围绕当前角色回答，并在适合时用一个简短问题推进流程。`;
 
 const sessions = new Map();
 
@@ -48,7 +62,7 @@ export function conversationRelayTwiml(wsUrl = WS_URL) {
   <Connect action="${escapeXml(BASE_URL)}/relay-ended">
     <ConversationRelay
       url="${escapeXml(wsUrl)}"
-      welcomeGreeting="您好，我是智能客服小云。请问有什么可以帮您？"
+      welcomeGreeting="您好，这里是法院通知中心的AI演示客服，我是小云。请问您是张伟先生吗？"
       language="zh-CN"
       transcriptionLanguage="zh-CN"
       transcriptionProvider="Deepgram"

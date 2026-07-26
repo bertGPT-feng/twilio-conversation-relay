@@ -48,7 +48,7 @@ async function sttElevenLabs(audioUrl) {
   const fd = new FormData();
   fd.append("file", new Blob([buf], { type: "audio/wav" }), "rec.wav");
   fd.append("model_id", "scribe_v1");
-  fd.append("language", "zh");
+  fd.append("language_code", "zh");
 
   const r2 = await fetch("https://api.elevenlabs.io/v1/speech-to-text", {
     method: "POST",

@@ -66,6 +66,16 @@ fastify.register(fastifyFormBody);
 
 fastify.get("/health", async (req, reply) => reply.send({ ok: true }));
 
+// 查看最近日志
+fastify.get("/logs", async (req, reply) => {
+  try {
+    const lines = fs.readFileSync(LOG_FILE, "utf-8").split("\n").filter(Boolean).slice(-30);
+    reply.type("text/plain").send(lines.join("\n"));
+  } catch(e) {
+    reply.send({ error: e.message });
+  }
+});
+
 // 接听 → 问候 + 录音
 fastify.all("/voice", async (req, reply) => {
   const cs = req.body?.CallSid || "?";

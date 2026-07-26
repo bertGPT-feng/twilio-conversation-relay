@@ -1,5 +1,4 @@
 import Fastify from "fastify";
-import fastifyWs from "@fastify/websocket";
 import fastifyFormBody from "@fastify/formbody";
 import OpenAI from "openai";
 import dotenv from "dotenv";
@@ -7,40 +6,23 @@ import fs from "fs";
 
 dotenv.config();
 
-// ── 端口 ─────────────────────────────────────────
 const PORT = process.env.PORT || 8080;
-
-// ── 域名（用于 Twilio WebSocket） ────────────────
-// Railway 不会自动设置 DOMAIN，需要你在后台手动填入
-// 变量名: DOMAIN ，值: 你的 Railway 应用域名（如 xxx.up.railway.app）
 const DOMAIN = process.env.DOMAIN;
-if (DOMAIN) {
-  console.log(`✅ DOMAIN 已配置: ${DOMAIN}`);
-} else {
-  console.warn("⚠️ DOMAIN 未设置 — Twilio 无法连接。部署完成后在 Railway 后台添加 DOMAIN 环境变量");
-  console.warn("   变量名: DOMAIN");
-  console.warn("   值   : 你的 Railway 应用域名（如 xxx.up.railway.app，去掉 https://）");
-}
-
-const cleanDomain = DOMAIN ? DOMAIN.replace(/^https?:\/\//, "") : null;
-const WS_URL = cleanDomain ? `wss://${cleanDomain}/ws` : null;
 const LLM_MODEL = process.env.LLM_MODEL || "deepseek/deepseek-v4-flash";
-
-// ── 日志 ─────────────────────────────────────────
 const LOG_FILE = "/tmp/relay_debug.log";
+
 function log(...args) {
   const line = `[${new Date().toISOString()}] ${args.join(" ")}`;
   console.log(...args);
-  try {
-    fs.appendFileSync(LOG_FILE, line + "\n");
-  } catch (_) {}
+  try { fs.appendFileSync(LOG_FILE, line + "\n"); } catch (_) {}
 }
 
-// ── 欢迎语 ───────────────────────────────────────
-const WELCOME_GREETING =
-  "您好，这里是法院通知中心。我是小云，请问您是张伟先生吗？";
+// ── LLM 客户端 ───────────────────────────────────
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+  baseURL: process.env.OPENAI_BASE_URL,
+});
 
-// ── 系统提示词 ───────────────────────────────────
 const SYSTEM_PROMPT = `你是"法院通知中心"的 AI 语音客服，名叫小云。
 
 ## 重要规则
@@ -58,14 +40,7 @@ const SYSTEM_PROMPT = `你是"法院通知中心"的 AI 语音客服，名叫小
 - 文书类型：民事判决书
 - 登记地址：北京市朝阳区建国路88号`;
 
-// ── 通话语境存储 ─────────────────────────────────
 const sessions = new Map();
-
-// ── OpenAI 客户端 ────────────────────────────────
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-  baseURL: process.env.OPENAI_BASE_URL,
-});
 
 async function getAIResponse(conversation) {
   const messages = [
@@ -76,122 +51,105 @@ async function getAIResponse(conversation) {
     model: LLM_MODEL,
     messages,
     temperature: 0.6,
-    max_tokens: 100,
+    max_tokens: 120,
   });
   return response.choices[0].message.content.trim();
 }
 
-// ── Fastify 服务 ─────────────────────────────────
+// ── Fastify ──────────────────────────────────────
 const fastify = Fastify({ logger: false });
-fastify.register(fastifyWs);
 fastify.register(fastifyFormBody);
 
-// 健康检查端点 — Railway 会用它检测服务是否在线
-fastify.get("/health", async (request, reply) => {
-  reply.send({ status: "ok", domain: cleanDomain || "not set" });
+// 健康检查
+fastify.get("/health", async (req, reply) => {
+  reply.send({ status: "ok", domain: DOMAIN || "not set" });
 });
 
-// TwiML 端点
-fastify.all("/twiml", async (request, reply) => {
-  if (!cleanDomain) {
-    reply.status(500).type("text/plain").send("DOMAIN 未配置，无法生成 TwiML");
-    return;
-  }
-  reply.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
+// ── 接听电话：欢迎语 ──────────────────────────────
+fastify.all("/voice", async (req, reply) => {
+  const callSid = req.body?.CallSid || "unknown";
+  log(`📞 来电: ${callSid}`);
+  sessions.set(callSid, []);
+
+  const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Connect>
-    <ConversationRelay
-      url="wss://${cleanDomain}/ws"
-      welcomeGreeting="${WELCOME_GREETING}"
-      voice="Google.zh-CN-Wavenet-C" />
-  </Connect>
+  <Gather input="speech" timeout="5" speechTimeout="auto" language="zh-CN" action="/gather" method="POST">
+    <Say voice="Google.zh-CN-Wavenet-C" language="zh-CN">
+      您好，这里是法院通知中心。我是小云，请问您是张伟先生吗？
+    </Say>
+  </Gather>
+  <Redirect>/voice</Redirect>
+</Response>`;
+  reply.type("text/xml").send(twiml);
+});
+
+// ── 处理用户语音回复 ──────────────────────────────
+fastify.all("/gather", async (req, reply) => {
+  const callSid = req.body?.CallSid;
+  const speechResult = req.body?.SpeechResult;
+  const confidence = req.body?.Confidence;
+
+  log(`🗣️ 用户 (${callSid}): ${speechResult} (置信度: ${confidence})`);
+
+  if (!callSid || !speechResult) {
+    // 没听到，再问一次
+    return reply.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Gather input="speech" timeout="5" speechTimeout="auto" language="zh-CN" action="/gather" method="POST">
+    <Say voice="Google.zh-CN-Wavenet-C">对不起，我没听清楚，您能再说一遍吗？</Say>
+  </Gather>
+  <Redirect>/voice</Redirect>
 </Response>`);
+  }
+
+  const conversation = sessions.get(callSid) || [];
+  conversation.push({ role: "user", content: speechResult });
+
+  try {
+    const aiResponse = await getAIResponse(conversation);
+    conversation.push({ role: "assistant", content: aiResponse });
+    log(`🤖 AI (${callSid}): ${aiResponse}`);
+
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="Google.zh-CN-Wavenet-C" language="zh-CN">${escapeXml(aiResponse)}</Say>
+  <Gather input="speech" timeout="5" speechTimeout="auto" language="zh-CN" action="/gather" method="POST">
+    <Say voice="Google.zh-CN-Wavenet-C" language="zh-CN">请讲。</Say>
+  </Gather>
+  <Redirect>/voice</Redirect>
+</Response>`;
+    reply.type("text/xml").send(twiml);
+  } catch (err) {
+    log(`❌ LLM 错误: ${err.message}`);
+    reply.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="Google.zh-CN-Wavenet-C">抱歉，系统正忙，请稍后再试。</Say>
+  <Hangup/>
+</Response>`);
+  }
 });
 
-// WebSocket 端点 — Twilio Conversation Relay 实时语音流
-fastify.register(async function (fastify) {
-  fastify.get("/ws", { websocket: true }, (ws, req) => {
-    log("🔌 WebSocket connected");
-
-    ws.on("message", async (data) => {
-      try {
-        const message = JSON.parse(data);
-        log("📨 消息类型:", message.type);
-
-        switch (message.type) {
-          case "setup":
-            const callSid = message.callSid;
-            log("📞 通话建立:", callSid);
-            ws.callSid = callSid;
-            sessions.set(callSid, []);
-            break;
-
-          case "prompt":
-            log("🗣️ 用户说:", message.voicePrompt);
-            const conversation = sessions.get(ws.callSid);
-            if (!conversation) {
-              log("⚠️ 找不到通话记录，忽略");
-              break;
-            }
-            conversation.push({ role: "user", content: message.voicePrompt });
-
-            try {
-              const response = await getAIResponse(conversation);
-              conversation.push({ role: "assistant", content: response });
-              log("🤖 AI 回复:", response);
-
-              if (ws.readyState === 1) {
-                ws.send(
-                  JSON.stringify({
-                    type: "text",
-                    token: response,
-                    last: true,
-                  })
-                );
-              }
-            } catch (err) {
-              log("❌ LLM 错误:", err.message);
-              if (ws.readyState === 1) {
-                ws.send(
-                  JSON.stringify({
-                    type: "text",
-                    token: "抱歉，系统正忙，请稍后再试。",
-                    last: true,
-                  })
-                );
-              }
-            }
-            break;
-
-          case "interrupt":
-            log("⏸️ 用户打断了对话");
-            break;
-
-          default:
-            log("⚠️ 未知消息类型:", message.type);
-        }
-      } catch (err) {
-        log("❌ 消息解析错误:", err);
-      }
-    });
-
-    ws.on("close", () => {
-      log("🔌 WebSocket 关闭");
-      if (ws.callSid) {
-        sessions.delete(ws.callSid);
-      }
-    });
-  });
+// ── 通话结束 ──────────────────────────────────────
+fastify.all("/hangup", async (req, reply) => {
+  const callSid = req.body?.CallSid;
+  log(`📞 通话结束: ${callSid}`);
+  sessions.delete(callSid);
+  reply.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>`);
 });
+
+function escapeXml(str) {
+  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+}
 
 // ── 启动 ─────────────────────────────────────────
 try {
   await fastify.listen({ port: PORT, host: "0.0.0.0" });
   log(`
 ╔══════════════════════════════════════╗
-║  Twilio Conversation Relay 已启动    ║
+║  Twilio AI 语音客服 (HTTP/Gather)    ║
 ║  端口: ${PORT}                       ║
-${cleanDomain ? `║  WebSocket: wss://${cleanDomain}/ws   ║` : `║  ⚠️  DOMAIN 未配置                    ║`}
+║  接听: /voice                        ║
+║  处理: /gather                       ║
 ╚══════════════════════════════════════╝
   `);
 } catch (err) {

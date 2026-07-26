@@ -6,8 +6,8 @@ test("generates Chinese ConversationRelay TwiML without ElevenLabs", () => {
   const xml = conversationRelayTwiml("wss://relay.example.test/ws");
   assert.match(xml, /url="wss:\/\/relay\.example\.test\/ws"/);
   assert.match(xml, /language="zh-CN"/);
-  assert.match(xml, /transcriptionProvider="Google"/);
-  assert.match(xml, /speechModel="long"/);
+  assert.match(xml, /transcriptionProvider="Deepgram"/);
+  assert.match(xml, /speechModel="nova-2-general"/);
   assert.match(xml, /ttsProvider="Amazon"/);
   assert.match(xml, /voice="Zhiyu-Neural"/);
   assert.doesNotMatch(xml, /ElevenLabs/i);

@@ -7,7 +7,9 @@ import fs from "fs";
 dotenv.config();
 
 const PORT = process.env.PORT || 8080;
-const DOMAIN = process.env.DOMAIN;
+const BASE_URL = process.env.DOMAIN 
+  ? `https://${process.env.DOMAIN.replace(/^https?:\/\//, '')}`
+  : `http://localhost:${PORT}`;
 const LLM_MODEL = process.env.LLM_MODEL || "deepseek/deepseek-v4-flash";
 const LOG_FILE = "/tmp/relay_debug.log";
 
@@ -17,7 +19,6 @@ function log(...args) {
   try { fs.appendFileSync(LOG_FILE, line + "\n"); } catch (_) {}
 }
 
-// ── LLM 客户端 ───────────────────────────────────
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
   baseURL: process.env.OPENAI_BASE_URL,
@@ -56,50 +57,46 @@ async function getAIResponse(conversation) {
   return response.choices[0].message.content.trim();
 }
 
-// ── Fastify ──────────────────────────────────────
 const fastify = Fastify({ logger: false });
 fastify.register(fastifyFormBody);
 
-// 健康检查
 fastify.get("/health", async (req, reply) => {
-  reply.send({ status: "ok", domain: DOMAIN || "not set" });
+  reply.send({ status: "ok", baseUrl: BASE_URL });
 });
 
-// ── 接听电话：欢迎语 ──────────────────────────────
+// ── 接听电话 ──────────────────────────────────────
 fastify.all("/voice", async (req, reply) => {
   const callSid = req.body?.CallSid || "unknown";
   log(`📞 来电: ${callSid}`);
   sessions.set(callSid, []);
 
-  const twiml = `<?xml version="1.0" encoding="UTF-8"?>
+  reply.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Gather input="speech" timeout="5" speechTimeout="auto" language="zh-CN" action="/gather" method="POST">
+  <Gather input="speech" timeout="4" speechTimeout="auto" language="zh-CN" action="${BASE_URL}/gather" method="POST">
     <Say voice="Google.zh-CN-Wavenet-C" language="zh-CN">
       您好，这里是法院通知中心。我是小云，请问您是张伟先生吗？
     </Say>
   </Gather>
-  <Redirect>/voice</Redirect>
-</Response>`;
-  reply.type("text/xml").send(twiml);
+  <Redirect>${BASE_URL}/voice</Redirect>
+</Response>`);
 });
 
-// ── 处理用户语音回复 ──────────────────────────────
+// ── 处理用户回复 ──────────────────────────────────
 fastify.all("/gather", async (req, reply) => {
   const callSid = req.body?.CallSid;
   const speechResult = req.body?.SpeechResult;
-  const confidence = req.body?.Confidence;
 
-  log(`🗣️ 用户 (${callSid}): ${speechResult} (置信度: ${confidence})`);
+  log(`🗣️ 用户 (${callSid}): ${speechResult}`);
 
-  if (!callSid || !speechResult) {
-    // 没听到，再问一次
-    return reply.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
+  if (!speechResult) {
+    reply.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Gather input="speech" timeout="5" speechTimeout="auto" language="zh-CN" action="/gather" method="POST">
+  <Gather input="speech" timeout="4" speechTimeout="auto" language="zh-CN" action="${BASE_URL}/gather" method="POST">
     <Say voice="Google.zh-CN-Wavenet-C">对不起，我没听清楚，您能再说一遍吗？</Say>
   </Gather>
-  <Redirect>/voice</Redirect>
+  <Redirect>${BASE_URL}/voice</Redirect>
 </Response>`);
+    return;
   }
 
   const conversation = sessions.get(callSid) || [];
@@ -110,15 +107,14 @@ fastify.all("/gather", async (req, reply) => {
     conversation.push({ role: "assistant", content: aiResponse });
     log(`🤖 AI (${callSid}): ${aiResponse}`);
 
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>
+    reply.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say voice="Google.zh-CN-Wavenet-C" language="zh-CN">${escapeXml(aiResponse)}</Say>
-  <Gather input="speech" timeout="5" speechTimeout="auto" language="zh-CN" action="/gather" method="POST">
+  <Gather input="speech" timeout="4" speechTimeout="auto" language="zh-CN" action="${BASE_URL}/gather" method="POST">
     <Say voice="Google.zh-CN-Wavenet-C" language="zh-CN">请讲。</Say>
   </Gather>
-  <Redirect>/voice</Redirect>
-</Response>`;
-    reply.type("text/xml").send(twiml);
+  <Redirect>${BASE_URL}/voice</Redirect>
+</Response>`);
   } catch (err) {
     log(`❌ LLM 错误: ${err.message}`);
     reply.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
@@ -129,29 +125,13 @@ fastify.all("/gather", async (req, reply) => {
   }
 });
 
-// ── 通话结束 ──────────────────────────────────────
-fastify.all("/hangup", async (req, reply) => {
-  const callSid = req.body?.CallSid;
-  log(`📞 通话结束: ${callSid}`);
-  sessions.delete(callSid);
-  reply.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>`);
-});
-
 function escapeXml(str) {
   return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
 }
 
-// ── 启动 ─────────────────────────────────────────
 try {
   await fastify.listen({ port: PORT, host: "0.0.0.0" });
-  log(`
-╔══════════════════════════════════════╗
-║  Twilio AI 语音客服 (HTTP/Gather)    ║
-║  端口: ${PORT}                       ║
-║  接听: /voice                        ║
-║  处理: /gather                       ║
-╚══════════════════════════════════════╝
-  `);
+  log(`\n✅ AI 语音客服已启动 (${BASE_URL})`);
 } catch (err) {
   console.error(err);
   process.exit(1);

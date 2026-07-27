@@ -13,7 +13,10 @@ const DOMAIN = (process.env.DOMAIN || process.env.RAILWAY_PUBLIC_DOMAIN || "")
   .replace(/\/+$/, "");
 const BASE_URL = DOMAIN ? `https://${DOMAIN}` : `http://localhost:${PORT}`;
 const WS_URL = DOMAIN ? `wss://${DOMAIN}/ws` : "";
-const LLM_MODEL = process.env.LLM_MODEL || "deepseek/deepseek-v4-flash";
+const USE_DEEPSEEK_OFFICIAL = Boolean(process.env.DEEPSEEK_API_KEY);
+const LLM_MODEL = USE_DEEPSEEK_OFFICIAL
+  ? process.env.DEEPSEEK_MODEL || "deepseek-chat"
+  : process.env.LLM_MODEL || "deepseek/deepseek-v4-flash";
 const LOG_FILE = "/tmp/relay_debug.log";
 export const WELCOME_GREETING =
   "您好，这里是法院通知中心的AI演示客服，我是小云。请问您是刘宗宝先生吗？";
@@ -107,10 +110,13 @@ export function identityResponseFor(input) {
 }
 
 function createOpenAIClient() {
-  if (!process.env.OPENAI_API_KEY) return null;
+  const apiKey = process.env.DEEPSEEK_API_KEY || process.env.OPENAI_API_KEY;
+  if (!apiKey) return null;
   return new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY,
-    baseURL: process.env.OPENAI_BASE_URL,
+    apiKey,
+    baseURL: USE_DEEPSEEK_OFFICIAL
+      ? "https://api.deepseek.com"
+      : process.env.OPENAI_BASE_URL,
   });
 }
 

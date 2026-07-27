@@ -15,6 +15,8 @@ const BASE_URL = DOMAIN ? `https://${DOMAIN}` : `http://localhost:${PORT}`;
 const WS_URL = DOMAIN ? `wss://${DOMAIN}/ws` : "";
 const LLM_MODEL = process.env.LLM_MODEL || "deepseek/deepseek-v4-flash";
 const LOG_FILE = "/tmp/relay_debug.log";
+export const WELCOME_GREETING =
+  "您好，这里是法院通知中心的AI演示客服，我是小云。请问您是刘宗宝先生吗？";
 
 export const SYSTEM_PROMPT = `你是“法院通知中心”的 AI 演示客服，名字叫小云。
 
@@ -63,7 +65,7 @@ export function conversationRelayTwiml(wsUrl = WS_URL) {
   <Connect action="${escapeXml(BASE_URL)}/relay-ended">
     <ConversationRelay
       url="${escapeXml(wsUrl)}"
-      welcomeGreeting="您好，这里是法院通知中心的AI演示客服，我是小云。请问您是刘宗宝先生吗？"
+      welcomeGreeting="${WELCOME_GREETING}"
       language="zh-CN"
       transcriptionLanguage="zh-CN"
       transcriptionProvider="Deepgram"
@@ -78,6 +80,30 @@ export function conversationRelayTwiml(wsUrl = WS_URL) {
     </ConversationRelay>
   </Connect>
 </Response>`;
+}
+
+export function identityResponseFor(input) {
+  const text = String(input || "")
+    .replace(/[\s，。！？,.!?]/g, "")
+    .trim();
+  if (/^(不是|不对|打错|你找错|不是本人)/.test(text)) {
+    return {
+      confirmed: false,
+      text: "抱歉，可能是我们联系错了。为保护信息安全，我不会继续说明，打扰您了，再见。",
+    };
+  }
+  if (/^(是的|是啊|对的|对|没错|本人|我就是|嗯|是)$/.test(text) || /^(是的|是啊|对的|我就是)/.test(text)) {
+    return {
+      confirmed: true,
+      text:
+        "好的，刘先生。这里有一份关于演示案号（2026）京01民初123号的民事判决书。" +
+        "请问您现在方便了解送达流程吗？",
+    };
+  }
+  return {
+    confirmed: null,
+    text: "抱歉，我没有听清。请问您是刘宗宝先生本人吗？",
+  };
 }
 
 function createOpenAIClient() {
@@ -205,6 +231,7 @@ export function buildServer({ openai = createOpenAIClient() } = {}) {
     instance.get("/ws", { websocket: true }, (socket) => {
       let callSid = null;
       let activeResponse = null;
+      let awaitingIdentity = true;
       log("🔌 WebSocket连接");
 
       socket.on("message", async (data) => {
@@ -213,7 +240,7 @@ export function buildServer({ openai = createOpenAIClient() } = {}) {
 
           if (message.type === "setup") {
             callSid = message.callSid;
-            sessions.set(callSid, []);
+            sessions.set(callSid, [{ role: "assistant", content: WELCOME_GREETING }]);
             log("📞 Relay通话:", callSid || "?");
             return;
           }
@@ -223,14 +250,35 @@ export function buildServer({ openai = createOpenAIClient() } = {}) {
             const userText = String(message.voicePrompt || "").trim();
             if (!userText || !callSid) return;
 
-            activeResponse?.abort();
-            const controller = new AbortController();
-            activeResponse = controller;
             const conversation = sessions.get(callSid) || [];
             sessions.set(callSid, conversation);
             conversation.push({ role: "user", content: userText });
             log("🗣️ 用户:", userText);
             const startedAt = Date.now();
+
+            if (awaitingIdentity) {
+              const identity = identityResponseFor(userText);
+              if (identity.confirmed !== null) awaitingIdentity = false;
+              conversation.push({ role: "assistant", content: identity.text });
+              if (socket.readyState === 1) {
+                socket.send(
+                  JSON.stringify({
+                    type: "text",
+                    token: identity.text,
+                    last: true,
+                    interruptible: true,
+                    preemptible: true,
+                  }),
+                );
+              }
+              log("⚡ 本地首轮:", `${Date.now() - startedAt}ms`);
+              log("🤖 本地:", identity.text);
+              return;
+            }
+
+            activeResponse?.abort();
+            const controller = new AbortController();
+            activeResponse = controller;
             let firstTokenAt = null;
 
             try {

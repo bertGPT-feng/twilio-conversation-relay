@@ -1,12 +1,33 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { conversationRelayTwiml, streamAIResponse } from "./server.js";
+import {
+  conversationRelayTwiml,
+  identityResponseFor,
+  streamAIResponse,
+  WELCOME_GREETING,
+} from "./server.js";
 
 test("TwiML enables fast turn detection and speech interruption", () => {
   const xml = conversationRelayTwiml("wss://relay.example.test/ws");
   assert.match(xml, /speechTimeout="900"/);
   assert.match(xml, /interruptible="speech"/);
   assert.match(xml, /reportInputDuringAgentSpeech="speech"/);
+});
+
+test("welcome greeting and affirmative identity reply advance without the LLM", () => {
+  assert.match(WELCOME_GREETING, /刘宗宝先生/);
+  const response = identityResponseFor("是的");
+  assert.equal(response.confirmed, true);
+  assert.doesNotMatch(response.text, /请问您是刘宗宝/);
+  assert.match(response.text, /民事判决书/);
+  assert.match(response.text, /送达流程吗？$/);
+});
+
+test("unclear identity reply asks once more without disclosing case details", () => {
+  const response = identityResponseFor("喂，你说什么");
+  assert.equal(response.confirmed, null);
+  assert.match(response.text, /刘宗宝先生本人吗？$/);
+  assert.doesNotMatch(response.text, /案号|判决书/);
 });
 
 test("streams complete LLM sentences and marks only the final sentence", async () => {

@@ -32,7 +32,8 @@ export const SYSTEM_PROMPT = `你是“法院通知中心”的 AI 演示客服�
 5. 不编造新案件事实，不提供法律结论，也不冒充法官、律师或执法人员。
 6. 不索要验证码、密码、银行卡信息，不要求转账或付款。
 7. 如果被问及真实性，明确说明这是 AI 演示客服，真实司法通知应通过官方渠道核验。
-8. 每轮围绕当前角色回答，并在适合时用一个简短问题推进流程。`;
+8. 每轮围绕当前角色回答，并在适合时用一个简短问题推进流程。
+9. 每次回答必须以完整的句号、问号或感叹号结束，绝不能停在半句话。`;
 
 const sessions = new Map();
 
@@ -94,7 +95,7 @@ export async function streamAIResponse(openai, conversation, onToken, signal) {
       model: LLM_MODEL,
       messages: [{ role: "system", content: SYSTEM_PROMPT }, ...conversation.slice(-10)],
       temperature: 0.6,
-      max_tokens: 160,
+      max_tokens: 240,
       stream: true,
     },
     { signal },
@@ -108,18 +109,49 @@ export async function streamAIResponse(openai, conversation, onToken, signal) {
     return text;
   }
 
-  let answer = "";
-  let pendingToken = null;
+  let rawAnswer = "";
+  let sentenceBuffer = "";
+  let pendingSentence = null;
+  let spokenAnswer = "";
+  let finishReason = null;
+
+  async function queueSentence(sentence) {
+    if (pendingSentence !== null) {
+      await onToken(pendingSentence, false);
+      spokenAnswer += pendingSentence;
+    }
+    pendingSentence = sentence;
+  }
+
   for await (const chunk of response) {
+    finishReason = chunk.choices?.[0]?.finish_reason || finishReason;
     const token = chunk.choices?.[0]?.delta?.content;
     if (!token) continue;
-    answer += token;
-    if (pendingToken !== null) await onToken(pendingToken, false);
-    pendingToken = token;
+    rawAnswer += token;
+    sentenceBuffer += token;
+
+    const completeSentences = sentenceBuffer.match(/.*?[。！？?!]+/gs) || [];
+    for (const sentence of completeSentences) await queueSentence(sentence);
+    if (completeSentences.length > 0) {
+      sentenceBuffer = sentenceBuffer.slice(completeSentences.join("").length);
+    }
   }
-  if (pendingToken === null) throw new Error("LLM 返回空内容");
-  await onToken(pendingToken, true);
-  return answer.trim();
+
+  log("🧠 LLM结束:", finishReason || "unknown", `原始字符=${rawAnswer.trim().length}`);
+  const incompleteTail = sentenceBuffer.trim();
+  if (incompleteTail) {
+    log("⚠️ 丢弃未完整结句:", incompleteTail);
+    if (incompleteTail.length <= 12 && pendingSentence === null) {
+      await queueSentence(`${incompleteTail}。`);
+    } else {
+      await queueSentence("后续信息需要通过官方渠道确认。请问您需要我重新说明吗？");
+    }
+  }
+
+  if (pendingSentence === null) throw new Error("LLM 返回空内容");
+  await onToken(pendingSentence, true);
+  spokenAnswer += pendingSentence;
+  return spokenAnswer.trim();
 }
 
 export function buildServer({ openai = createOpenAIClient() } = {}) {

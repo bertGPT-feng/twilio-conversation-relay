@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   conversationRelayTwiml,
   identityResponseFor,
+  localResponseFor,
   streamAIResponse,
   WELCOME_GREETING,
 } from "./server.js";
@@ -30,6 +31,41 @@ test("unclear identity reply asks once more without disclosing case details", ()
   assert.doesNotMatch(response.text, /案号|判决书/);
 });
 
+test("common delivery intents are answered locally without the LLM", () => {
+  assert.match(localResponseFor("方便"), /送达/);
+  assert.match(localResponseFor("这是什么东西"), /民事判决书/);
+  assert.match(localResponseFor("不需要了"), /再见。$/);
+  assert.equal(localResponseFor("为什么会给我发这份文书"), null);
+});
+
+test("emits a completed first sentence before the stream finishes", async () => {
+  let releaseSecondChunk;
+  const waitForSecondChunk = new Promise((resolve) => {
+    releaseSecondChunk = resolve;
+  });
+  const openai = {
+    chat: {
+      completions: {
+        create: async () => ({
+          async *[Symbol.asyncIterator]() {
+            yield { choices: [{ delta: { content: "好的。" } }] };
+            await waitForSecondChunk;
+            yield { choices: [{ delta: { content: "我来说明送达流程。" } }] };
+          },
+        }),
+      },
+    },
+  };
+  const tokens = [];
+  const responsePromise = streamAIResponse(openai, [], async (token, last) =>
+    tokens.push({ token, last }),
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(tokens, [{ token: "好的。", last: false }]);
+  releaseSecondChunk();
+  await responsePromise;
+});
+
 test("streams complete LLM sentences and marks only the final sentence", async () => {
   const openai = {
     chat: {
@@ -50,7 +86,10 @@ test("streams complete LLM sentences and marks only the final sentence", async (
     async (token, last) => tokens.push({ token, last }),
   );
   assert.equal(answer, "您好，刘先生。");
-  assert.deepEqual(tokens, [{ token: "您好，刘先生。", last: true }]);
+  assert.deepEqual(tokens, [
+    { token: "您好，刘先生。", last: false },
+    { token: "", last: true },
+  ]);
 });
 
 test("replaces a long incomplete tail with a complete spoken fallback", async () => {

@@ -109,6 +109,22 @@ export function identityResponseFor(input) {
   };
 }
 
+export function localResponseFor(input) {
+  const text = String(input || "")
+    .replace(/[\s，。！？,.!?]/g, "")
+    .trim();
+  if (/^(方便|可以|行|好的|好)$/.test(text)) {
+    return "好的。这是一份民事判决书的演示送达通知。请问您需要了解送达方式吗？";
+  }
+  if (/^(这是什么|什么东西|说什么东西|这是什么东西|什么文书)$/.test(text)) {
+    return "这是一份民事判决书的演示送达通知，案号是（2026）京01民初123号。请问您需要了解送达方式吗？";
+  }
+  if (/^(不需要|不需要了|不用|不用了|没有|没了|再见)$/.test(text)) {
+    return "好的，打扰您了。如有疑问，请通过法院官方渠道核实。再见。";
+  }
+  return null;
+}
+
 function createOpenAIClient() {
   const apiKey = process.env.DEEPSEEK_API_KEY || process.env.OPENAI_API_KEY;
   if (!apiKey) return null;
@@ -143,16 +159,12 @@ export async function streamAIResponse(openai, conversation, onToken, signal) {
 
   let rawAnswer = "";
   let sentenceBuffer = "";
-  let pendingSentence = null;
   let spokenAnswer = "";
   let finishReason = null;
 
-  async function queueSentence(sentence) {
-    if (pendingSentence !== null) {
-      await onToken(pendingSentence, false);
-      spokenAnswer += pendingSentence;
-    }
-    pendingSentence = sentence;
+  async function emitSentence(sentence) {
+    await onToken(sentence, false);
+    spokenAnswer += sentence;
   }
 
   for await (const chunk of response) {
@@ -163,7 +175,7 @@ export async function streamAIResponse(openai, conversation, onToken, signal) {
     sentenceBuffer += token;
 
     const completeSentences = sentenceBuffer.match(/.*?[。！？?!]+/gs) || [];
-    for (const sentence of completeSentences) await queueSentence(sentence);
+    for (const sentence of completeSentences) await emitSentence(sentence);
     if (completeSentences.length > 0) {
       sentenceBuffer = sentenceBuffer.slice(completeSentences.join("").length);
     }
@@ -173,16 +185,20 @@ export async function streamAIResponse(openai, conversation, onToken, signal) {
   const incompleteTail = sentenceBuffer.trim();
   if (incompleteTail) {
     log("⚠️ 丢弃未完整结句:", incompleteTail);
-    if (incompleteTail.length <= 12 && pendingSentence === null) {
-      await queueSentence(`${incompleteTail}。`);
+    if (incompleteTail.length <= 12 && !spokenAnswer) {
+      const completedTail = `${incompleteTail}。`;
+      await onToken(completedTail, true);
+      spokenAnswer += completedTail;
     } else {
-      await queueSentence("后续信息需要通过官方渠道确认。请问您需要我重新说明吗？");
+      const fallback = "后续信息需要通过官方渠道确认。请问您需要我重新说明吗？";
+      await onToken(fallback, true);
+      spokenAnswer += fallback;
     }
+  } else if (spokenAnswer) {
+    await onToken("", true);
   }
 
-  if (pendingSentence === null) throw new Error("LLM 返回空内容");
-  await onToken(pendingSentence, true);
-  spokenAnswer += pendingSentence;
+  if (!spokenAnswer) throw new Error("LLM 返回空内容");
   return spokenAnswer.trim();
 }
 
@@ -279,6 +295,25 @@ export function buildServer({ openai = createOpenAIClient() } = {}) {
               }
               log("⚡ 本地首轮:", `${Date.now() - startedAt}ms`);
               log("🤖 本地:", identity.text);
+              return;
+            }
+
+            const localResponse = localResponseFor(userText);
+            if (localResponse) {
+              conversation.push({ role: "assistant", content: localResponse });
+              if (socket.readyState === 1) {
+                socket.send(
+                  JSON.stringify({
+                    type: "text",
+                    token: localResponse,
+                    last: true,
+                    interruptible: true,
+                    preemptible: true,
+                  }),
+                );
+              }
+              log("⚡ 本地意图:", `${Date.now() - startedAt}ms`);
+              log("🤖 本地:", localResponse);
               return;
             }
 

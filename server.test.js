@@ -43,7 +43,7 @@ test("ConversationRelay confirms identity before sending a complex prompt to the
       completions: {
         create: async ({ messages }) => {
           assert.match(messages[0].content, /法院通知中心/);
-          assert.equal(messages.at(-1).content, "为什么会给我发这份文书");
+          assert.equal(messages.at(-1).content, "请解释一个复杂问题");
           return { choices: [{ message: { content: "这是演示送达流程说明。" } }] };
         },
       },
@@ -59,16 +59,24 @@ test("ConversationRelay confirms identity before sending a complex prompt to the
   assert.match(identityMessage.token, /民事判决书/);
   assert.equal(identityMessage.last, true);
 
-  const llmResponse = new Promise((resolve) => socket.once("message", resolve));
+  const llmMessages = [];
+  const llmResponse = new Promise((resolve) => {
+    socket.on("message", (message) => {
+      llmMessages.push(JSON.parse(message.toString()));
+      if (llmMessages.length === 2) resolve();
+    });
+  });
   socket.send(
     JSON.stringify({
       type: "prompt",
-      voicePrompt: "为什么会给我发这份文书",
+      voicePrompt: "请解释一个复杂问题",
       last: true,
     }),
   );
-  const llmMessage = JSON.parse((await llmResponse).toString());
-  assert.deepEqual(llmMessage, {
+  await llmResponse;
+  assert.match(llmMessages[0].token, /为您说明/);
+  assert.equal(llmMessages[0].last, false);
+  assert.deepEqual(llmMessages[1], {
     type: "text",
     token: "这是演示送达流程说明。",
     last: true,
@@ -104,6 +112,55 @@ test("welcome interruption without a final prompt receives an identity fallback"
   const message = JSON.parse((await response).toString());
   assert.match(message.token, /请问您是刘宗宝先生吗？$/);
   assert.equal(message.last, true);
+
+  const closed = new Promise((resolve) => socket.once("close", resolve));
+  socket.close();
+  await closed;
+  await app.close();
+});
+
+test("slow LLM receives an immediate acknowledgement and a bounded fallback", async () => {
+  const openai = {
+    chat: {
+      completions: {
+        create: async (_body, { signal }) => ({
+          async *[Symbol.asyncIterator]() {
+            await new Promise((_, reject) => {
+              signal.addEventListener(
+                "abort",
+                () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })),
+                { once: true },
+              );
+            });
+          },
+        }),
+      },
+    },
+  };
+  const app = buildServer({ openai, llmFirstTokenTimeoutMs: 10 });
+  await app.ready();
+  const socket = await app.injectWS("/ws");
+  socket.send(JSON.stringify({ type: "setup", callSid: "CA_LLM_TIMEOUT" }));
+
+  const identityResponse = new Promise((resolve) => socket.once("message", resolve));
+  socket.send(JSON.stringify({ type: "prompt", voicePrompt: "是的", last: true }));
+  await identityResponse;
+
+  const messages = [];
+  socket.on("message", (message) => messages.push(JSON.parse(message.toString())));
+  socket.send(
+    JSON.stringify({
+      type: "prompt",
+      voicePrompt: "请解释一个复杂问题",
+      last: true,
+    }),
+  );
+  await new Promise((resolve) => setTimeout(resolve, 50));
+
+  assert.match(messages[0].token, /为您说明/);
+  assert.equal(messages[0].last, false);
+  assert.match(messages[1].token, /官方渠道/);
+  assert.equal(messages[1].last, true);
 
   const closed = new Promise((resolve) => socket.once("close", resolve));
   socket.close();

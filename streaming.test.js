@@ -35,7 +35,7 @@ test("common delivery intents are answered locally without the LLM", () => {
   assert.match(localResponseFor("方便"), /送达/);
   assert.match(localResponseFor("这是什么东西"), /民事判决书/);
   assert.match(localResponseFor("不需要了"), /再见。$/);
-  assert.equal(localResponseFor("为什么会给我发这份文书"), null);
+  assert.equal(localResponseFor("请解释一个复杂问题"), null);
 });
 
 test("generic acknowledgement uses the previous assistant question", () => {
@@ -67,6 +67,20 @@ test("STT near-matches are accepted only in a matching conversation context", ()
     },
   ];
   assert.match(localResponseFor("都不方便", deliveryChoiceContext), /官方渠道/);
+});
+
+test("scripted delivery questions stay local and within configured facts", () => {
+  assert.match(localResponseFor("为什么要给我发这个"), /AI功能演示/);
+  assert.match(localResponseFor("判决书有什么内容"), /无法提供具体内容/);
+  assert.match(localResponseFor("不方便"), /官方渠道/);
+
+  const deliveryContext = [
+    {
+      role: "assistant",
+      content: "请问您需要了解送达方式吗？",
+    },
+  ];
+  assert.match(localResponseFor("需要", deliveryContext), /邮寄送达或电子送达/);
 });
 
 test("emits a completed first sentence before the stream finishes", async () => {

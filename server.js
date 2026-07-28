@@ -155,6 +155,18 @@ export function localResponseFor(input, conversation = []) {
   ) {
     return "明白，那本次演示不继续安排送达。真实案件请通过法院官方渠道核实。";
   }
+  if (/为什么.*(发|联系)|为什么要给我|为什么有这个/.test(text)) {
+    return "这是一次AI功能演示，仅用于说明文书送达流程，不涉及真实案件。真实通知请通过法院官方渠道核实。";
+  }
+  if (/判决书.*内容|内容.*判决书|具体内容/.test(text)) {
+    return "抱歉，本演示无法提供具体内容。真实文书内容请通过法院官方渠道核实。";
+  }
+  if (/^(不方便|没空|现在不方便)$/.test(text)) {
+    return "明白，那本次演示先到这里。真实案件请通过法院官方渠道核实。";
+  }
+  if (/需要了解送达方式/.test(previousAssistant || "") && /^(需要|要|想了解)$/.test(text)) {
+    return "送达方式通常有邮寄送达或电子送达，请问您倾向哪一种？";
+  }
   if (/^(好的|好)$/.test(text)) {
     if (/需要了解送达方式/.test(previousAssistant || "")) {
       return "好的。送达方式通常有邮寄送达或电子送达，请问您倾向哪一种？";
@@ -256,6 +268,7 @@ export async function streamAIResponse(openai, conversation, onToken, signal) {
 export function buildServer({
   openai = createOpenAIClient(),
   welcomeInterruptDelayMs = 1200,
+  llmFirstTokenTimeoutMs = 1500,
 } = {}) {
   const fastify = Fastify({ logger: false });
   fastify.register(fastifyFormBody);
@@ -378,6 +391,24 @@ export function buildServer({
             const controller = new AbortController();
             activeResponse = controller;
             let firstTokenAt = null;
+            let timedOut = false;
+            const acknowledgement = "好的，我为您说明一下。";
+            if (socket.readyState === 1) {
+              socket.send(
+                JSON.stringify({
+                  type: "text",
+                  token: acknowledgement,
+                  last: false,
+                  interruptible: true,
+                  preemptible: true,
+                }),
+              );
+            }
+            log("⚡ 即时承接:", `${Date.now() - startedAt}ms`);
+            const firstTokenTimer = setTimeout(() => {
+              timedOut = true;
+              controller.abort();
+            }, llmFirstTokenTimeoutMs);
 
             try {
               const answer = await streamAIResponse(
@@ -385,8 +416,9 @@ export function buildServer({
                 conversation,
                 async (token, last) => {
                   if (controller.signal.aborted || socket.readyState !== 1) return;
-                  if (firstTokenAt === null) {
+                  if (token && firstTokenAt === null) {
                     firstTokenAt = Date.now();
+                    clearTimeout(firstTokenTimer);
                     log("⚡ 首Token:", `${firstTokenAt - startedAt}ms`);
                   }
                   socket.send(
@@ -402,9 +434,28 @@ export function buildServer({
                 controller.signal,
               );
               if (controller.signal.aborted) return;
+              clearTimeout(firstTokenTimer);
               conversation.push({ role: "assistant", content: answer });
               log("🤖 AI:", answer, `总耗时=${Date.now() - startedAt}ms`);
             } catch (error) {
+              if (timedOut) {
+                const fallback =
+                  "具体情况暂时无法立即确认，请通过法院官方渠道核实。请问您需要我继续说明演示送达流程吗？";
+                conversation.push({ role: "assistant", content: fallback });
+                if (socket.readyState === 1) {
+                  socket.send(
+                    JSON.stringify({
+                      type: "text",
+                      token: fallback,
+                      last: true,
+                      interruptible: true,
+                      preemptible: true,
+                    }),
+                  );
+                }
+                log("⏱️ LLM首Token超时:", `${Date.now() - startedAt}ms`);
+                return;
+              }
               if (controller.signal.aborted || error.name === "AbortError") {
                 log("⏹️ LLM生成已中止");
                 return;
@@ -420,6 +471,7 @@ export function buildServer({
                 );
               }
             } finally {
+              clearTimeout(firstTokenTimer);
               if (activeResponse === controller) activeResponse = null;
             }
             return;

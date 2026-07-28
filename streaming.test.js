@@ -38,6 +38,17 @@ test("common delivery intents are answered locally without the LLM", () => {
   assert.equal(localResponseFor("为什么会给我发这份文书"), null);
 });
 
+test("generic acknowledgement uses the previous assistant question", () => {
+  const deliveryContext = [
+    {
+      role: "assistant",
+      content: "这是一份民事判决书的演示送达通知。请问您需要了解送达方式吗？",
+    },
+  ];
+  assert.match(localResponseFor("好的", deliveryContext), /邮寄送达或电子送达/);
+  assert.equal(localResponseFor("好的", []), null);
+});
+
 test("emits a completed first sentence before the stream finishes", async () => {
   let releaseSecondChunk;
   const waitForSecondChunk = new Promise((resolve) => {

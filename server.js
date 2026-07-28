@@ -109,11 +109,23 @@ export function identityResponseFor(input) {
   };
 }
 
-export function localResponseFor(input) {
+export function localResponseFor(input, conversation = []) {
   const text = String(input || "")
     .replace(/[\s，。！？,.!?]/g, "")
     .trim();
-  if (/^(方便|可以|行|好的|好)$/.test(text)) {
+  if (/^(好的|好)$/.test(text)) {
+    const previousAssistant = [...conversation]
+      .reverse()
+      .find((message) => message.role === "assistant")?.content;
+    if (/需要了解送达方式/.test(previousAssistant || "")) {
+      return "好的。送达方式通常有邮寄送达或电子送达，请问您倾向哪一种？";
+    }
+    if (/更倾向于哪种方式/.test(previousAssistant || "")) {
+      return "好的。请问您选择邮寄送达，还是电子送达？";
+    }
+    return null;
+  }
+  if (/^(方便|可以|行)$/.test(text)) {
     return "好的。这是一份民事判决书的演示送达通知。请问您需要了解送达方式吗？";
   }
   if (/^(这是什么|什么东西|说什么东西|这是什么东西|什么文书)$/.test(text)) {
@@ -298,7 +310,7 @@ export function buildServer({ openai = createOpenAIClient() } = {}) {
               return;
             }
 
-            const localResponse = localResponseFor(userText);
+            const localResponse = localResponseFor(userText, conversation);
             if (localResponse) {
               conversation.push({ role: "assistant", content: localResponse });
               if (socket.readyState === 1) {

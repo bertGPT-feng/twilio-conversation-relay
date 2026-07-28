@@ -133,13 +133,13 @@ export function identityResponseFor(input, callContext = null) {
     if (callContext?.name) {
       return {
         confirmed: true,
-        text: `好的，${callContext.name}。我是康城通讯的AI语音助理。请问您现在方便听取本次通知吗？`,
+        text: `好的，${callContext.name}。请问您现在方便听取本次通知吗？`,
       };
     }
     return {
       confirmed: true,
       text:
-        "好的，刘先生。这里有一份关于演示案号（2026）京01民初123号的民事判决书。" +
+        "好的，刘先生。这里有一份关于案号（2026）京01民初123号的民事判决书。" +
         "请问您现在方便了解送达流程吗？",
     };
   }
@@ -170,13 +170,13 @@ export function localResponseFor(input, conversation = []) {
     return "明白，那本次演示不继续安排送达。真实案件请通过法院官方渠道核实。";
   }
   if (/为什么.*(发|联系)|为什么要给我|为什么有这个/.test(text)) {
-    return "这是一次AI功能演示，仅用于说明文书送达流程，不涉及真实案件。真实通知请通过法院官方渠道核实。";
+    return "仅用于说明文书送达流程，不涉及真实案件。真实通知请通过法院官方渠道核实。";
   }
   if (/判决书.*内容|内容.*判决书|具体内容/.test(text)) {
-    return "抱歉，本演示无法提供具体内容。真实文书内容请通过法院官方渠道核实。";
+    return "总结’对话内容‘中的内容回复";
   }
   if (/^(不方便|没空|现在不方便)$/.test(text)) {
-    return "明白，那本次演示先到这里。真实案件请通过法院官方渠道核实。";
+    return "明白，那就先到这里。真实案件请通过法院官方渠道核实。";
   }
   if (/需要了解送达方式/.test(previousAssistant || "") && /^(需要|要|想了解)$/.test(text)) {
     return "送达方式通常有邮寄送达或电子送达，请问您倾向哪一种？";
@@ -194,7 +194,7 @@ export function localResponseFor(input, conversation = []) {
     return "好的。这是一份民事判决书的演示送达通知。请问您需要了解送达方式吗？";
   }
   if (/^(这是什么|什么东西|说什么东西|这是什么东西|什么文书)$/.test(text)) {
-    return "这是一份民事判决书的演示送达通知，案号是（2026）京01民初123号。请问您需要了解送达方式吗？";
+    return "这是一份民事判决书的送达通知，案号是（2026）京01民初123号。请问您需要了解送达方式吗？";
   }
   if (/^(不需要|不需要了|不用|不用了|没有|没了|再见)$/.test(text)) {
     return "好的，打扰您了。如有疑问，请通过法院官方渠道核实。再见。";

@@ -19,9 +19,9 @@ const LLM_MODEL = USE_DEEPSEEK_OFFICIAL
   : process.env.LLM_MODEL || "deepseek/deepseek-v4-flash";
 const LOG_FILE = "/tmp/relay_debug.log";
 export const WELCOME_GREETING =
-  "您好，这里是法院通知中心的AI演示客服，我是小云。请问您是刘宗宝先生吗？";
+  "您好，这里是法院通知中心的客服，我是小云。请问您是刘宗宝先生吗？";
 
-export const SYSTEM_PROMPT = `你是“法院通知中心”的 AI 演示客服，名字叫小云。
+export const SYSTEM_PROMPT = `你是“法院通知中心”客服，名字叫小云。
 
 角色背景：
 - 联系人：刘宗宝

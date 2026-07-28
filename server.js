@@ -113,10 +113,23 @@ export function localResponseFor(input, conversation = []) {
   const text = String(input || "")
     .replace(/[\s，。！？,.!?]/g, "")
     .trim();
+  const previousAssistant = [...conversation]
+    .reverse()
+    .find((message) => message.role === "assistant")?.content;
+
+  if (
+    /现在方便了解送达流程/.test(previousAssistant || "") &&
+    /^(方便|旁边|我说方便)$/.test(text)
+  ) {
+    return "好的。这是一份民事判决书的演示送达通知。请问您需要了解送达方式吗？";
+  }
+  if (
+    /邮寄送达|电子送达/.test(previousAssistant || "") &&
+    /^(都不方便|都不行|哪个都不方便)$/.test(text)
+  ) {
+    return "明白，那本次演示不继续安排送达。真实案件请通过法院官方渠道核实。";
+  }
   if (/^(好的|好)$/.test(text)) {
-    const previousAssistant = [...conversation]
-      .reverse()
-      .find((message) => message.role === "assistant")?.content;
     if (/需要了解送达方式/.test(previousAssistant || "")) {
       return "好的。送达方式通常有邮寄送达或电子送达，请问您倾向哪一种？";
     }

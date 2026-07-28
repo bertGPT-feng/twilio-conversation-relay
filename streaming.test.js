@@ -49,6 +49,26 @@ test("generic acknowledgement uses the previous assistant question", () => {
   assert.equal(localResponseFor("好的", []), null);
 });
 
+test("STT near-matches are accepted only in a matching conversation context", () => {
+  const convenienceContext = [
+    {
+      role: "assistant",
+      content: "请问您现在方便了解送达流程吗？",
+    },
+  ];
+  assert.match(localResponseFor("旁边", convenienceContext), /演示送达通知/);
+  assert.match(localResponseFor("我说方便", convenienceContext), /演示送达通知/);
+  assert.equal(localResponseFor("旁边", []), null);
+
+  const deliveryChoiceContext = [
+    {
+      role: "assistant",
+      content: "请问您选择邮寄送达，还是电子送达？",
+    },
+  ];
+  assert.match(localResponseFor("都不方便", deliveryChoiceContext), /官方渠道/);
+});
+
 test("emits a completed first sentence before the stream finishes", async () => {
   let releaseSecondChunk;
   const waitForSecondChunk = new Promise((resolve) => {

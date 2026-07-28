@@ -227,7 +227,10 @@ export async function streamAIResponse(openai, conversation, onToken, signal) {
   return spokenAnswer.trim();
 }
 
-export function buildServer({ openai = createOpenAIClient() } = {}) {
+export function buildServer({
+  openai = createOpenAIClient(),
+  welcomeInterruptDelayMs = 1200,
+} = {}) {
   const fastify = Fastify({ logger: false });
   fastify.register(fastifyFormBody);
   fastify.register(fastifyWebsocket);
@@ -279,6 +282,7 @@ export function buildServer({ openai = createOpenAIClient() } = {}) {
       let callSid = null;
       let activeResponse = null;
       let awaitingIdentity = true;
+      let identityFallbackTimer = null;
       log("🔌 WebSocket连接");
 
       socket.on("message", async (data) => {
@@ -294,6 +298,8 @@ export function buildServer({ openai = createOpenAIClient() } = {}) {
 
           if (message.type === "prompt") {
             if (message.last === false) return;
+            clearTimeout(identityFallbackTimer);
+            identityFallbackTimer = null;
             const userText = String(message.voicePrompt || "").trim();
             if (!userText || !callSid) return;
 
@@ -397,6 +403,27 @@ export function buildServer({ openai = createOpenAIClient() } = {}) {
             log("⏸️ 用户打断");
             activeResponse?.abort();
             activeResponse = null;
+            if (awaitingIdentity && !identityFallbackTimer) {
+              identityFallbackTimer = setTimeout(() => {
+                identityFallbackTimer = null;
+                const fallback = "抱歉，刚才可能没有听清。请问您是刘宗宝先生吗？";
+                const conversation = sessions.get(callSid) || [];
+                conversation.push({ role: "assistant", content: fallback });
+                sessions.set(callSid, conversation);
+                if (socket.readyState === 1) {
+                  socket.send(
+                    JSON.stringify({
+                      type: "text",
+                      token: fallback,
+                      last: true,
+                      interruptible: true,
+                      preemptible: true,
+                    }),
+                  );
+                }
+                log("⚡ 开场打断兜底:", fallback);
+              }, welcomeInterruptDelayMs);
+            }
           }
           if (message.type === "error") log("❌ Relay:", message.description || "未知错误");
         } catch (error) {
@@ -405,6 +432,7 @@ export function buildServer({ openai = createOpenAIClient() } = {}) {
       });
 
       socket.on("close", () => {
+        clearTimeout(identityFallbackTimer);
         activeResponse?.abort();
         log("🔌 WebSocket断开:", callSid || "?");
         if (callSid) sessions.delete(callSid);

@@ -80,3 +80,33 @@ test("ConversationRelay confirms identity before sending a complex prompt to the
   await closed;
   await app.close();
 });
+
+test("welcome interruption without a final prompt receives an identity fallback", async () => {
+  const app = buildServer({ openai: null, welcomeInterruptDelayMs: 5 });
+  await app.ready();
+  const socket = await app.injectWS("/ws");
+  socket.send(JSON.stringify({ type: "setup", callSid: "CA_INTERRUPT_ONLY" }));
+
+  const response = Promise.race([
+    new Promise((resolve) => socket.once("message", resolve)),
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("identity fallback was not sent")), 100),
+    ),
+  ]);
+  socket.send(
+    JSON.stringify({
+      type: "interrupt",
+      utteranceUntilInterrupt: "您好，这里是",
+      durationUntilInterruptMs: 900,
+    }),
+  );
+
+  const message = JSON.parse((await response).toString());
+  assert.match(message.token, /请问您是刘宗宝先生吗？$/);
+  assert.equal(message.last, true);
+
+  const closed = new Promise((resolve) => socket.once("close", resolve));
+  socket.close();
+  await closed;
+  await app.close();
+});

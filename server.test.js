@@ -64,6 +64,7 @@ test("production dashboard requires its management password", async () => {
   const app = buildServer({
     openai: null,
     twilioClient: null,
+    dashboardUsername: "test-user",
     dashboardPassword: "test-dashboard-password",
     productionDashboard: true,
   });
@@ -73,7 +74,9 @@ test("production dashboard requires its management password", async () => {
   const allowed = await app.inject({
     method: "GET",
     url: "/api/session",
-    headers: { authorization: "Bearer test-dashboard-password" },
+    headers: {
+      authorization: `Basic ${Buffer.from("test-user:test-dashboard-password").toString("base64")}`,
+    },
   });
   assert.equal(allowed.statusCode, 200);
   assert.equal(allowed.json().ok, true);
@@ -103,6 +106,7 @@ test("dashboard queue starts one Twilio call with dynamic contact context", asyn
     },
     twilioClient: { calls },
     twilioPhoneNumber: "+12565550100",
+    dashboardUsername: "queue-user",
     dashboardPassword: "queue-password",
     productionDashboard: true,
     queueIntervalSeconds: 5,
@@ -110,7 +114,9 @@ test("dashboard queue starts one Twilio call with dynamic contact context", asyn
   const response = await app.inject({
     method: "POST",
     url: "/api/queues",
-    headers: { authorization: "Bearer queue-password" },
+    headers: {
+      authorization: `Basic ${Buffer.from("queue-user:queue-password").toString("base64")}`,
+    },
     payload: {
       contacts: [{ name: "测试联系人", phone: "+85589503303", note: "测试备注" }],
       context: "这是经过授权的康城通讯业务回访测试。",

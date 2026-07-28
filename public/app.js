@@ -20,6 +20,7 @@ const statusLabels = {
 let contacts = [];
 let activeJob = null;
 let pollTimer = null;
+let dashboardUsername = sessionStorage.getItem("kangcheng-username") || "";
 let dashboardPassword = sessionStorage.getItem("kangcheng-password") || "";
 
 const rows = document.querySelector("#contactRows");
@@ -63,9 +64,12 @@ function showToast(message) {
 }
 
 async function api(path, options = {}) {
+  const credentials = dashboardUsername && dashboardPassword
+    ? btoa(unescape(encodeURIComponent(`${dashboardUsername}:${dashboardPassword}`)))
+    : "";
   const headers = {
     ...(options.body ? { "Content-Type": "application/json" } : {}),
-    ...(dashboardPassword ? { Authorization: `Bearer ${dashboardPassword}` } : {}),
+    ...(credentials ? { Authorization: `Basic ${credentials}` } : {}),
     ...options.headers,
   };
   const response = await fetch(path, { ...options, headers });
@@ -261,18 +265,21 @@ function showLogin(message = "") {
 
 document.querySelector("#loginForm").addEventListener("submit", async (event) => {
   event.preventDefault();
+  const username = document.querySelector("#usernameField").value.trim();
   const password = document.querySelector("#passwordField").value;
   try {
     await fetch("/api/session", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password }),
+      body: JSON.stringify({ username, password }),
     }).then(async (response) => {
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.message || "验证失败。");
       return payload;
     });
+    dashboardUsername = username;
     dashboardPassword = password;
+    sessionStorage.setItem("kangcheng-username", username);
     sessionStorage.setItem("kangcheng-password", password);
     loginDialog.close();
     showToast("管理身份验证成功。");

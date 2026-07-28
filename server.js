@@ -366,6 +366,7 @@ export function buildServer({
   openai = createOpenAIClient(),
   twilioClient = createTwilioClient(),
   twilioPhoneNumber = process.env.TWILIO_PHONE_NUMBER || "",
+  dashboardUsername = process.env.DASHBOARD_USERNAME || "admin",
   dashboardPassword = process.env.DASHBOARD_PASSWORD || "",
   productionDashboard = Boolean(process.env.RAILWAY_ENVIRONMENT),
   welcomeInterruptDelayMs = 1200,
@@ -386,8 +387,20 @@ export function buildServer({
   function dashboardAuthorized(request) {
     if (!dashboardPasswordRequired) return true;
     const authorization = String(request.headers.authorization || "");
-    const provided = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
-    return timingSafeMatch(provided, configuredDashboardPassword);
+    if (!authorization.startsWith("Basic ")) return false;
+    let username = "";
+    let password = "";
+    try {
+      [username, password] = Buffer.from(authorization.slice(6), "base64")
+        .toString("utf8")
+        .split(/:(.*)/s, 2);
+    } catch {
+      return false;
+    }
+    return (
+      timingSafeMatch(username, dashboardUsername) &&
+      timingSafeMatch(password, configuredDashboardPassword)
+    );
   }
 
   function requireDashboard(request, reply) {
@@ -498,9 +511,12 @@ export function buildServer({
     }
     if (
       dashboardPasswordRequired &&
-      !timingSafeMatch(request.body?.password, configuredDashboardPassword)
+      (!timingSafeMatch(request.body?.username, dashboardUsername) ||
+        !timingSafeMatch(request.body?.password, configuredDashboardPassword))
     ) {
-      return reply.status(401).send({ error: "UNAUTHORIZED", message: "管理密码不正确。" });
+      return reply
+        .status(401)
+        .send({ error: "UNAUTHORIZED", message: "管理账号或密码不正确。" });
     }
     return { ok: true, passwordRequired: dashboardPasswordRequired };
   });

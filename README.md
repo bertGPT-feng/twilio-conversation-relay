@@ -41,6 +41,7 @@ git push -u origin main
 | `TWILIO_ACCOUNT_SID` | Twilio Account SID |
 | `TWILIO_AUTH_TOKEN` | Twilio Auth Token |
 | `TWILIO_PHONE_NUMBER` | Twilio 外呼号码，E.164 格式 |
+| `DASHBOARD_USERNAME` | 康城通讯网页管理账号 |
 | `DASHBOARD_PASSWORD` | 康城通讯网页管理密码 |
 | `DOMAIN` | Railway 生成的公网域名，不含路径 |
 
@@ -49,7 +50,7 @@ git push -u origin main
 
 ### 3. 打开外呼工作台
 
-访问 Railway 生成的域名，输入 `DASHBOARD_PASSWORD`，导入联系人并检查上下文。
+访问 Railway 生成的域名，输入管理账号和密码，导入联系人并检查上下文。
 确认号码与联系人授权后，网页才会发起真实电话。
 
 ConversationRelay 会把用户语音实时转成文字并通过 WebSocket 发送给本服务；

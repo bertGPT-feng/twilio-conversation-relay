@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="康城通讯批量外呼工作台：导入联系人、编辑对话上下文并管理拨号队列。"
+    />
+    <title>康城通讯 · 外呼工作台</title>
+    <link rel="stylesheet" href="/app.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="康城通讯首页">
+          <span class="brand-mark" aria-hidden="true">
+            <i></i><i></i><i></i>
+          </span>
+          <span>
+            <strong>康城通讯</strong>
+            <small>KANGCHENG CONNECT</small>
+          </span>
+        </a>
+        <div class="system-state">
+          <span class="live-dot" aria-hidden="true"></span>
+          <span>线路在线</span>
+          <b>ConversationRelay</b>
+        </div>
+        <button class="ghost-button" id="settingsButton" type="button" aria-label="打开设置">
+          <span aria-hidden="true">⌘</span> 系统设置
+        </button>
+      </header>
+
+      <main>
+        <section class="hero">
+          <div>
+            <p class="eyebrow">OUTBOUND DESK / 外呼调度台</p>
+            <h1>让每一通电话，<br /><em>按你的节奏</em>抵达。</h1>
+          </div>
+          <div class="hero-note">
+            <span>今日工作台</span>
+            <p>导入联系人，检查上下文，然后逐个启动拨号。每一步都留有确认。</p>
+          </div>
+        </section>
+
+        <section class="workspace" aria-label="外呼工作区">
+          <aside class="control-rail">
+            <section class="panel import-panel">
+              <div class="panel-heading">
+                <div>
+                  <span class="step">01</span>
+                  <h2>导入联系人</h2>
+                </div>
+                <button class="text-button" id="clearButton" type="button">清空</button>
+              </div>
+
+              <label class="drop-zone" id="dropZone" for="fileInput">
+                <input id="fileInput" type="file" accept=".csv,.txt,.xlsx" />
+                <span class="upload-icon" aria-hidden="true">↥</span>
+                <strong>拖入名单，或点击选择</strong>
+                <small>支持 Excel、CSV、TXT · 自动识别姓名与电话</small>
+              </label>
+
+              <div class="import-hint">
+                <span>文件格式示例</span>
+                <code>姓名, 电话</code>
+              </div>
+            </section>
+
+            <section class="panel context-panel">
+              <div class="panel-heading">
+                <div>
+                  <span class="step">02</span>
+                  <h2>对话上下文</h2>
+                </div>
+                <span class="saved-state" id="savedState">已自动保存</span>
+              </div>
+              <label class="field-label" for="contextInput">
+                本轮统一上下文
+                <span id="contextCount">0 / 2000</span>
+              </label>
+              <textarea id="contextInput" maxlength="2000">你是康城通讯的AI语音助理。请先说明AI身份，再礼貌确认接听人的姓名。回答要简短、自然，每次一到两句话；不索取密码、验证码、银行卡信息，也不要求转账。</textarea>
+              <div class="context-tools">
+                <button class="chip active" type="button" data-template="service">客服回访</button>
+                <button class="chip" type="button" data-template="notice">业务通知</button>
+                <button class="chip" type="button" data-template="custom">自定义</button>
+              </div>
+            </section>
+          </aside>
+
+          <section class="queue-panel">
+            <div class="queue-header">
+              <div>
+                <span class="step">03</span>
+                <h2>拨号队列</h2>
+                <p><b id="contactCount">3</b> 位联系人等待检查</p>
+              </div>
+              <div class="queue-actions">
+                <button class="secondary-button" id="addContactButton" type="button">
+                  ＋ 添加联系人
+                </button>
+                <button class="secondary-button queue-control" id="pauseButton" type="button" hidden>
+                  暂停队列
+                </button>
+                <button class="danger-button queue-control" id="stopButton" type="button" hidden>
+                  停止队列
+                </button>
+                <button class="primary-button" id="reviewButton" type="button">
+                  检查并准备拨号 <span>→</span>
+                </button>
+              </div>
+            </div>
+
+            <div class="queue-summary">
+              <div><span>等待拨打</span><strong id="pendingCount">3</strong></div>
+              <div><span>进行中</span><strong id="callingCount">0</strong></div>
+              <div><span>已完成</span><strong id="completedCount">0</strong></div>
+              <div><span>异常</span><strong id="failedCount">0</strong></div>
+            </div>
+
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>顺序</th>
+                    <th>联系人</th>
+                    <th>电话号码</th>
+                    <th>本次备注</th>
+                    <th>状态</th>
+                    <th><span class="sr-only">操作</span></th>
+                  </tr>
+                </thead>
+                <tbody id="contactRows"></tbody>
+              </table>
+              <div class="empty-state" id="emptyState" hidden>
+                <span aria-hidden="true">↥</span>
+                <strong>队列还是空的</strong>
+                <p>从左侧导入联系人文件，或手动添加第一位联系人。</p>
+              </div>
+            </div>
+
+            <footer class="queue-footer">
+              <p><span class="shield" aria-hidden="true">✓</span> 批量拨号前会再次显示号码与人数供你确认</p>
+              <label class="interval-control">
+                自动间隔
+                <input id="intervalInput" type="number" min="5" max="300" value="8" />
+                秒
+              </label>
+            </footer>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="contactDialog">
+      <form method="dialog" id="contactForm">
+        <div class="dialog-heading">
+          <div>
+            <span class="step">NEW</span>
+            <h2>添加联系人</h2>
+          </div>
+          <button class="icon-button" value="cancel" formnovalidate aria-label="关闭">×</button>
+        </div>
+        <label>姓名<input id="nameField" autocomplete="name" placeholder="例如：陈先生" required /></label>
+        <label>电话号码<input id="phoneField" inputmode="tel" placeholder="+855…" required /></label>
+        <label>本次备注<input id="noteField" placeholder="选填" /></label>
+        <div class="dialog-actions">
+          <button class="secondary-button" value="cancel" formnovalidate>取消</button>
+          <button class="primary-button" id="saveContactButton" value="default">加入队列</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="reviewDialog">
+      <form method="dialog">
+        <div class="review-mark" aria-hidden="true">!</div>
+        <h2>确认拨号范围</h2>
+        <p id="reviewCopy"></p>
+        <div class="review-context">
+          <span>将使用的上下文</span>
+          <p id="reviewContext"></p>
+        </div>
+        <label class="confirm-check">
+          <input id="confirmCheck" type="checkbox" />
+          <span>我已检查联系人号码和对话内容</span>
+        </label>
+        <label class="confirm-check">
+          <input id="consentCheck" type="checkbox" />
+          <span>这些联系人已同意接收本次自动语音电话</span>
+        </label>
+        <div class="dialog-actions">
+          <button class="secondary-button" value="cancel">返回修改</button>
+          <button class="primary-button" id="confirmDialButton" value="cancel" disabled type="button">
+            确认并开始拨号
+          </button>
+        </div>
+        <small class="live-warning">确认后将通过 Twilio 发起真实电话，并可能产生费用。</small>
+      </form>
+    </dialog>
+
+    <dialog id="loginDialog" class="login-dialog">
+      <form id="loginForm">
+        <span class="brand-mark login-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <p class="eyebrow">SECURE ACCESS</p>
+        <h2>进入康城通讯</h2>
+        <p>请输入 Railway 中设置的管理密码。</p>
+        <label>管理密码<input id="passwordField" type="password" autocomplete="current-password" required /></label>
+        <p class="login-error" id="loginError" role="alert"></p>
+        <button class="primary-button" type="submit">验证并进入</button>
+      </form>
+    </dialog>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="/fflate.js"></script>
+    <script src="/app.js" defer></script>
+  </body>
+</html>

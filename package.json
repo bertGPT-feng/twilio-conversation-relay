@@ -11,7 +11,12 @@
     "start": "node server.js",
     "test": "node --test"
   },
-  "keywords": ["twilio", "conversation-relay", "voice", "ai"],
+  "keywords": [
+    "twilio",
+    "conversation-relay",
+    "voice",
+    "ai"
+  ],
   "author": "",
   "license": "ISC",
   "dependencies": {
@@ -19,6 +24,8 @@
     "@fastify/websocket": "^11.3.0",
     "dotenv": "^17.4.2",
     "fastify": "^5.10.0",
-    "openai": "^6.49.0"
+    "fflate": "^0.8.3",
+    "openai": "^6.49.0",
+    "twilio": "^5.13.1"
   }
 }

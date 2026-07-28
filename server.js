@@ -2,8 +2,10 @@ import Fastify from "fastify";
 import fastifyFormBody from "@fastify/formbody";
 import fastifyWebsocket from "@fastify/websocket";
 import dotenv from "dotenv";
+import crypto from "crypto";
 import fs from "fs";
 import OpenAI from "openai";
+import twilio from "twilio";
 
 dotenv.config();
 
@@ -18,6 +20,9 @@ const LLM_MODEL = USE_DEEPSEEK_OFFICIAL
   ? process.env.DEEPSEEK_MODEL || "deepseek-v4-flash"
   : process.env.LLM_MODEL || "deepseek/deepseek-v4-flash";
 const LOG_FILE = "/tmp/relay_debug.log";
+const PUBLIC_DIR = new URL("./public/", import.meta.url);
+const FFLATE_BROWSER_FILE = new URL("./node_modules/fflate/umd/index.js", import.meta.url);
+const DEFAULT_QUEUE_INTERVAL_SECONDS = 8;
 export const WELCOME_GREETING =
   "您好，这里是法院通知中心的客服，我是小云。请问您是刘宗宝先生吗？";
 
@@ -87,14 +92,17 @@ function escapeXml(value) {
     .replace(/'/g, "&apos;");
 }
 
-export function conversationRelayTwiml(wsUrl = WS_URL) {
+export function conversationRelayTwiml(
+  wsUrl = WS_URL,
+  { welcomeGreeting = WELCOME_GREETING } = {},
+) {
   if (!wsUrl) throw new Error("DOMAIN or RAILWAY_PUBLIC_DOMAIN is required");
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect action="${escapeXml(BASE_URL)}/relay-ended">
     <ConversationRelay
       url="${escapeXml(wsUrl)}"
-      welcomeGreeting="${WELCOME_GREETING}"
+      welcomeGreeting="${escapeXml(welcomeGreeting)}"
       language="zh-CN"
       transcriptionLanguage="zh-CN"
       transcriptionProvider="Deepgram"
@@ -111,7 +119,7 @@ export function conversationRelayTwiml(wsUrl = WS_URL) {
 </Response>`;
 }
 
-export function identityResponseFor(input) {
+export function identityResponseFor(input, callContext = null) {
   const text = String(input || "")
     .replace(/[\s，。！？,.!?]/g, "")
     .trim();
@@ -122,6 +130,12 @@ export function identityResponseFor(input) {
     };
   }
   if (/^(是的|是啊|对的|对|没错|本人|我就是|嗯|是)$/.test(text) || /^(是的|是啊|对的|我就是)/.test(text)) {
+    if (callContext?.name) {
+      return {
+        confirmed: true,
+        text: `好的，${callContext.name}。我是康城通讯的AI语音助理。请问您现在方便听取本次通知吗？`,
+      };
+    }
     return {
       confirmed: true,
       text:
@@ -188,6 +202,16 @@ export function localResponseFor(input, conversation = []) {
   return null;
 }
 
+function dynamicLocalResponseFor(input) {
+  const text = String(input || "")
+    .replace(/[\s，。！？,.!?]/g, "")
+    .trim();
+  if (/^(不需要|不需要了|不用|不用了|停止|别打了|打错了|再见)$/.test(text)) {
+    return "好的，我会停止本次说明。打扰您了，再见。";
+  }
+  return null;
+}
+
 function createOpenAIClient() {
   const apiKey = process.env.DEEPSEEK_API_KEY || process.env.OPENAI_API_KEY;
   if (!apiKey) return null;
@@ -199,12 +223,18 @@ function createOpenAIClient() {
   });
 }
 
-export async function streamAIResponse(openai, conversation, onToken, signal) {
+export async function streamAIResponse(
+  openai,
+  conversation,
+  onToken,
+  signal,
+  systemPrompt = SYSTEM_PROMPT,
+) {
   if (!openai) throw new Error("OPENAI_API_KEY 未配置");
   const response = await openai.chat.completions.create(
     {
       model: LLM_MODEL,
-      messages: [{ role: "system", content: SYSTEM_PROMPT }, ...conversation.slice(-10)],
+      messages: [{ role: "system", content: systemPrompt }, ...conversation.slice(-10)],
       temperature: 0.6,
       max_tokens: 240,
       stream: true,
@@ -265,19 +295,332 @@ export async function streamAIResponse(openai, conversation, onToken, signal) {
   return spokenAnswer.trim();
 }
 
+function dynamicSystemPrompt(callContext) {
+  return `你是康城通讯的AI语音助理，正在与${callContext.name}通话。
+
+本次上下文：
+${callContext.context}
+
+联系人备注：
+${callContext.note || "无"}
+
+安全和表达规则：
+1. 必须透明说明自己是AI语音助理，不冒充真人、政府、法院、银行、律师或执法人员。
+2. 只围绕本次上下文回答，不编造事实；不知道时明确建议通过正式渠道核实。
+3. 每次只说一到两句自然中文，并以完整标点结束。
+4. 不索要密码、验证码、银行卡信息、身份证完整号码，不要求转账或付款。
+5. 对方否认身份、要求停止或表示打错时，立即停止披露并礼貌结束。
+6. 不使用 Markdown、列表、表情或不利于朗读的符号。`;
+}
+
+function normalizeE164(value) {
+  const phone = String(value || "").trim().replace(/[^\d+]/g, "");
+  if (!/^\+[1-9]\d{7,14}$/.test(phone)) return null;
+  return phone;
+}
+
+function safeContact(input) {
+  const name = String(input?.name || "").trim().slice(0, 80);
+  const phone = normalizeE164(input?.phone);
+  const note = String(input?.note || "").trim().slice(0, 300);
+  if (!name || !phone) return null;
+  return {
+    id: crypto.randomUUID(),
+    name,
+    phone,
+    note,
+    status: "pending",
+    callSid: null,
+    duration: null,
+    errorCode: null,
+    startedAt: null,
+    endedAt: null,
+  };
+}
+
+function publicJob(job) {
+  return {
+    id: job.id,
+    status: job.status,
+    intervalSeconds: job.intervalSeconds,
+    createdAt: job.createdAt,
+    startedAt: job.startedAt,
+    endedAt: job.endedAt,
+    activeCallSid: job.activeCallSid,
+    contacts: job.contacts,
+  };
+}
+
+function timingSafeMatch(received, expected) {
+  const left = Buffer.from(String(received || ""));
+  const right = Buffer.from(String(expected || ""));
+  return left.length === right.length && crypto.timingSafeEqual(left, right);
+}
+
+function createTwilioClient() {
+  if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN) return null;
+  return twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+}
+
 export function buildServer({
   openai = createOpenAIClient(),
+  twilioClient = createTwilioClient(),
+  twilioPhoneNumber = process.env.TWILIO_PHONE_NUMBER || "",
+  dashboardPassword = process.env.DASHBOARD_PASSWORD || "",
+  productionDashboard = Boolean(process.env.RAILWAY_ENVIRONMENT),
   welcomeInterruptDelayMs = 1200,
   llmFirstTokenTimeoutMs = 1500,
+  queueIntervalSeconds = DEFAULT_QUEUE_INTERVAL_SECONDS,
 } = {}) {
   const fastify = Fastify({ logger: false });
+  const jobs = new Map();
+  const callContexts = new Map();
   fastify.register(fastifyFormBody);
   fastify.register(fastifyWebsocket);
+
+  const configuredDashboardPassword = dashboardPassword;
+  const dashboardPasswordRequired = Boolean(
+    configuredDashboardPassword || productionDashboard,
+  );
+
+  function dashboardAuthorized(request) {
+    if (!dashboardPasswordRequired) return true;
+    const authorization = String(request.headers.authorization || "");
+    const provided = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
+    return timingSafeMatch(provided, configuredDashboardPassword);
+  }
+
+  function requireDashboard(request, reply) {
+    if (!configuredDashboardPassword && productionDashboard) {
+      reply.status(503).send({
+        error: "DASHBOARD_PASSWORD_NOT_CONFIGURED",
+        message: "Railway 尚未配置 DASHBOARD_PASSWORD。",
+      });
+      return false;
+    }
+    if (!dashboardAuthorized(request)) {
+      reply.status(401).send({ error: "UNAUTHORIZED", message: "管理密码不正确。" });
+      return false;
+    }
+    return true;
+  }
+
+  async function startNextCall(job) {
+    if (job.status !== "running" || job.activeCallSid) return;
+    const contact = job.contacts.find((item) => item.status === "pending");
+    if (!contact) {
+      job.status = "completed";
+      job.endedAt = new Date().toISOString();
+      log("✅ 队列完成:", job.id);
+      return;
+    }
+    if (!twilioClient || !twilioPhoneNumber) {
+      contact.status = "failed";
+      contact.errorCode = "TWILIO_NOT_CONFIGURED";
+      contact.endedAt = new Date().toISOString();
+      job.status = "failed";
+      job.endedAt = contact.endedAt;
+      log("❌ 队列拨号:", job.id, "Twilio未配置");
+      return;
+    }
+
+    const contextToken = crypto.randomBytes(24).toString("hex");
+    callContexts.set(contextToken, {
+      jobId: job.id,
+      contactId: contact.id,
+      name: contact.name,
+      note: contact.note,
+      context: job.context,
+    });
+    contact.status = "dialing";
+    contact.startedAt = new Date().toISOString();
+
+    try {
+      const query = new URLSearchParams({
+        jobId: job.id,
+        contactId: contact.id,
+        token: contextToken,
+      });
+      const call = await twilioClient.calls.create({
+        to: contact.phone,
+        from: twilioPhoneNumber,
+        url: `${BASE_URL}/voice?${query}`,
+        method: "POST",
+        statusCallback: `${BASE_URL}/call-status?${query}`,
+        statusCallbackMethod: "POST",
+        statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
+      });
+      contact.callSid = call.sid;
+      job.activeCallSid = call.sid;
+      log("📤 队列拨号:", job.id, contact.id, call.sid);
+    } catch (error) {
+      callContexts.delete(contextToken);
+      contact.status = "failed";
+      contact.errorCode = error.code || "CALL_CREATE_FAILED";
+      contact.endedAt = new Date().toISOString();
+      log("❌ 队列拨号:", job.id, contact.id, error.code || error.message);
+      if (job.status === "running") {
+        setTimeout(() => startNextCall(job), job.intervalSeconds * 1000);
+      }
+    }
+  }
+
+  fastify.get("/", async (_request, reply) => {
+    return reply
+      .type("text/html; charset=utf-8")
+      .send(fs.readFileSync(new URL("index.html", PUBLIC_DIR), "utf8"));
+  });
+
+  fastify.get("/app.css", async (_request, reply) => {
+    return reply
+      .type("text/css; charset=utf-8")
+      .send(fs.readFileSync(new URL("app.css", PUBLIC_DIR), "utf8"));
+  });
+
+  fastify.get("/app.js", async (_request, reply) => {
+    return reply
+      .type("application/javascript; charset=utf-8")
+      .send(fs.readFileSync(new URL("app.js", PUBLIC_DIR), "utf8"));
+  });
+
+  fastify.get("/fflate.js", async (_request, reply) => {
+    return reply
+      .type("application/javascript; charset=utf-8")
+      .send(fs.readFileSync(FFLATE_BROWSER_FILE, "utf8"));
+  });
+
+  fastify.post("/api/session", async (request, reply) => {
+    if (!configuredDashboardPassword && productionDashboard) {
+      return reply.status(503).send({
+        error: "DASHBOARD_PASSWORD_NOT_CONFIGURED",
+        message: "Railway 尚未配置 DASHBOARD_PASSWORD。",
+      });
+    }
+    if (
+      dashboardPasswordRequired &&
+      !timingSafeMatch(request.body?.password, configuredDashboardPassword)
+    ) {
+      return reply.status(401).send({ error: "UNAUTHORIZED", message: "管理密码不正确。" });
+    }
+    return { ok: true, passwordRequired: dashboardPasswordRequired };
+  });
+
+  fastify.get("/api/session", async (request, reply) => {
+    if (!requireDashboard(request, reply)) return;
+    return {
+      ok: true,
+      passwordRequired: dashboardPasswordRequired,
+      twilioReady: Boolean(twilioClient && twilioPhoneNumber),
+    };
+  });
+
+  fastify.post("/api/queues", async (request, reply) => {
+    if (!requireDashboard(request, reply)) return;
+    const requestedContacts = Array.isArray(request.body?.contacts)
+      ? request.body.contacts
+      : [];
+    const contacts = requestedContacts.map(safeContact).filter(Boolean);
+    const context = String(request.body?.context || "").trim().slice(0, 12000);
+    const requestedInterval = Number(request.body?.intervalSeconds);
+    const intervalSeconds = Number.isFinite(requestedInterval)
+      ? Math.min(300, Math.max(5, Math.round(requestedInterval)))
+      : queueIntervalSeconds;
+
+    if (!contacts.length || contacts.length !== requestedContacts.length) {
+      return reply.status(400).send({
+        error: "INVALID_CONTACTS",
+        message: "每位联系人都必须包含姓名和 E.164 国际电话号码。",
+      });
+    }
+    if (contacts.length > 500) {
+      return reply.status(400).send({
+        error: "TOO_MANY_CONTACTS",
+        message: "单次最多导入 500 位联系人。",
+      });
+    }
+    if (!context) {
+      return reply.status(400).send({
+        error: "CONTEXT_REQUIRED",
+        message: "请填写本轮通话上下文。",
+      });
+    }
+    if (!twilioClient || !twilioPhoneNumber) {
+      return reply.status(503).send({
+        error: "TWILIO_NOT_CONFIGURED",
+        message: "Twilio 账号或外呼号码尚未配置。",
+      });
+    }
+
+    const job = {
+      id: crypto.randomUUID(),
+      status: "running",
+      context,
+      intervalSeconds,
+      contacts,
+      activeCallSid: null,
+      createdAt: new Date().toISOString(),
+      startedAt: new Date().toISOString(),
+      endedAt: null,
+    };
+    jobs.set(job.id, job);
+    log("▶️ 队列启动:", job.id, `联系人=${contacts.length}`);
+    void startNextCall(job);
+    return reply.status(201).send(publicJob(job));
+  });
+
+  fastify.get("/api/queues/:jobId", async (request, reply) => {
+    if (!requireDashboard(request, reply)) return;
+    const job = jobs.get(request.params.jobId);
+    if (!job) return reply.status(404).send({ error: "QUEUE_NOT_FOUND" });
+    return publicJob(job);
+  });
+
+  fastify.post("/api/queues/:jobId/pause", async (request, reply) => {
+    if (!requireDashboard(request, reply)) return;
+    const job = jobs.get(request.params.jobId);
+    if (!job) return reply.status(404).send({ error: "QUEUE_NOT_FOUND" });
+    if (job.status === "running") job.status = "paused";
+    log("⏸️ 队列暂停:", job.id);
+    return publicJob(job);
+  });
+
+  fastify.post("/api/queues/:jobId/resume", async (request, reply) => {
+    if (!requireDashboard(request, reply)) return;
+    const job = jobs.get(request.params.jobId);
+    if (!job) return reply.status(404).send({ error: "QUEUE_NOT_FOUND" });
+    if (job.status === "paused") {
+      job.status = "running";
+      log("▶️ 队列继续:", job.id);
+      void startNextCall(job);
+    }
+    return publicJob(job);
+  });
+
+  fastify.post("/api/queues/:jobId/stop", async (request, reply) => {
+    if (!requireDashboard(request, reply)) return;
+    const job = jobs.get(request.params.jobId);
+    if (!job) return reply.status(404).send({ error: "QUEUE_NOT_FOUND" });
+    job.status = "stopped";
+    job.endedAt = new Date().toISOString();
+    for (const contact of job.contacts) {
+      if (contact.status === "pending") contact.status = "canceled";
+    }
+    if (job.activeCallSid && twilioClient) {
+      try {
+        await twilioClient.calls(job.activeCallSid).update({ status: "completed" });
+      } catch (error) {
+        log("❌ 停止当前通话:", job.id, error.code || error.message);
+      }
+    }
+    log("⏹️ 队列停止:", job.id);
+    return publicJob(job);
+  });
 
   fastify.get("/health", async () => ({
     ok: true,
     mode: "conversation-relay",
     websocket: Boolean(WS_URL),
+    dashboard: true,
   }));
 
   fastify.get("/logs", async (_request, reply) => {
@@ -293,9 +636,23 @@ export function buildServer({
     }
   });
 
-  const voiceHandler = async (_request, reply) => {
+  const voiceHandler = async (request, reply) => {
     try {
-      return reply.type("text/xml").send(conversationRelayTwiml());
+      const token = String(request.query?.token || "");
+      const callContext = callContexts.get(token);
+      if (token && !callContext) {
+        return reply
+          .status(403)
+          .type("text/xml")
+          .send('<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>');
+      }
+      const wsQuery = token ? `?token=${encodeURIComponent(token)}` : "";
+      const greeting = callContext?.name
+        ? `您好，我是康城通讯的AI语音助理。请问您是${callContext.name}吗？`
+        : WELCOME_GREETING;
+      return reply
+        .type("text/xml")
+        .send(conversationRelayTwiml(`${WS_URL}${wsQuery}`, { welcomeGreeting: greeting }));
     } catch (error) {
       log("❌ TwiML:", error.message);
       return reply.status(500).type("text/plain").send(error.message);
@@ -313,15 +670,47 @@ export function buildServer({
 
   fastify.all("/call-status", async (request, reply) => {
     log("📊 通话状态:", request.body?.CallSid || "?", request.body?.CallStatus || "");
+    const token = String(request.query?.token || "");
+    const callContext = callContexts.get(token);
+    const job = callContext ? jobs.get(callContext.jobId) : null;
+    const contact = job?.contacts.find((item) => item.id === callContext.contactId);
+    if (job && contact) {
+      const status = String(request.body?.CallStatus || "").toLowerCase();
+      const terminalStatuses = new Set([
+        "completed",
+        "busy",
+        "failed",
+        "no-answer",
+        "canceled",
+      ]);
+      if (status === "in-progress") contact.status = "in-progress";
+      else if (status === "ringing" || status === "queued") contact.status = status;
+      else if (terminalStatuses.has(status) && !contact.endedAt) {
+        contact.status = status;
+        contact.duration = Number(request.body?.CallDuration || 0);
+        contact.errorCode = request.body?.ErrorCode || null;
+        contact.endedAt = new Date().toISOString();
+        job.activeCallSid = null;
+        callContexts.delete(token);
+        if (job.status === "running") {
+          setTimeout(() => startNextCall(job), job.intervalSeconds * 1000);
+        }
+      }
+    }
     return reply.status(204).send();
   });
 
   fastify.register(async function websocketRoutes(instance) {
-    instance.get("/ws", { websocket: true }, (socket) => {
+    instance.get("/ws", { websocket: true }, (socket, request) => {
       let callSid = null;
       let activeResponse = null;
       let awaitingIdentity = true;
       let identityFallbackTimer = null;
+      const contextToken = String(request.query?.token || "");
+      const callContext = callContexts.get(contextToken) || null;
+      const activeSystemPrompt = callContext
+        ? dynamicSystemPrompt(callContext)
+        : SYSTEM_PROMPT;
       log("🔌 WebSocket连接");
 
       socket.on("message", async (data) => {
@@ -330,7 +719,10 @@ export function buildServer({
 
           if (message.type === "setup") {
             callSid = message.callSid;
-            sessions.set(callSid, [{ role: "assistant", content: WELCOME_GREETING }]);
+            const greeting = callContext?.name
+              ? `您好，我是康城通讯的AI语音助理。请问您是${callContext.name}吗？`
+              : WELCOME_GREETING;
+            sessions.set(callSid, [{ role: "assistant", content: greeting }]);
             log("📞 Relay通话:", callSid || "?");
             return;
           }
@@ -349,7 +741,7 @@ export function buildServer({
             const startedAt = Date.now();
 
             if (awaitingIdentity) {
-              const identity = identityResponseFor(userText);
+              const identity = identityResponseFor(userText, callContext);
               if (identity.confirmed !== null) awaitingIdentity = false;
               conversation.push({ role: "assistant", content: identity.text });
               if (socket.readyState === 1) {
@@ -368,7 +760,9 @@ export function buildServer({
               return;
             }
 
-            const localResponse = localResponseFor(userText, conversation);
+            const localResponse = callContext
+              ? dynamicLocalResponseFor(userText)
+              : localResponseFor(userText, conversation);
             if (localResponse) {
               conversation.push({ role: "assistant", content: localResponse });
               if (socket.readyState === 1) {
@@ -432,6 +826,7 @@ export function buildServer({
                   );
                 },
                 controller.signal,
+                activeSystemPrompt,
               );
               if (controller.signal.aborted) return;
               clearTimeout(firstTokenTimer);
@@ -484,7 +879,9 @@ export function buildServer({
             if (awaitingIdentity && !identityFallbackTimer) {
               identityFallbackTimer = setTimeout(() => {
                 identityFallbackTimer = null;
-                const fallback = "抱歉，刚才可能没有听清。请问您是刘宗宝先生吗？";
+                const fallback = callContext?.name
+                  ? `抱歉，刚才可能没有听清。请问您是${callContext.name}吗？`
+                  : "抱歉，刚才可能没有听清。请问您是刘宗宝先生吗？";
                 const conversation = sessions.get(callSid) || [];
                 conversation.push({ role: "assistant", content: fallback });
                 sessions.set(callSid, conversation);

@@ -28,6 +28,141 @@ test("health identifies the active ConversationRelay mode", async () => {
   await app.close();
 });
 
+test("dashboard route serves the Kangcheng Communications workspace", async () => {
+  const app = buildServer({ openai: null });
+  const response = await app.inject({ method: "GET", url: "/" });
+  assert.equal(response.statusCode, 200);
+  assert.match(response.headers["content-type"], /^text\/html/);
+  assert.match(response.body, /康城通讯/);
+  assert.match(response.body, /导入联系人/);
+  await app.close();
+});
+
+test("contact dialog can be dismissed without triggering required-field validation", async () => {
+  const app = buildServer({ openai: null });
+  const response = await app.inject({ method: "GET", url: "/" });
+  assert.match(
+    response.body,
+    /class="icon-button" value="cancel" formnovalidate/,
+  );
+  assert.match(
+    response.body,
+    /class="secondary-button" value="cancel" formnovalidate>取消/,
+  );
+  await app.close();
+});
+
+test("successful manual contact creation explicitly closes its dialog", async () => {
+  const app = buildServer({ openai: null });
+  const response = await app.inject({ method: "GET", url: "/app.js" });
+  assert.equal(response.statusCode, 200);
+  assert.match(response.body, /event\.preventDefault\(\);[\s\S]*contactDialog\.close\(\);/);
+  await app.close();
+});
+
+test("production dashboard requires its management password", async () => {
+  const app = buildServer({
+    openai: null,
+    twilioClient: null,
+    dashboardPassword: "test-dashboard-password",
+    productionDashboard: true,
+  });
+  const denied = await app.inject({ method: "GET", url: "/api/session" });
+  assert.equal(denied.statusCode, 401);
+
+  const allowed = await app.inject({
+    method: "GET",
+    url: "/api/session",
+    headers: { authorization: "Bearer test-dashboard-password" },
+  });
+  assert.equal(allowed.statusCode, 200);
+  assert.equal(allowed.json().ok, true);
+  await app.close();
+});
+
+test("dashboard queue starts one Twilio call with dynamic contact context", async () => {
+  let callOptions;
+  let receivedSystemPrompt;
+  let receivedUserPrompt;
+  const calls = () => ({ update: async () => ({ status: "completed" }) });
+  calls.create = async (options) => {
+    callOptions = options;
+    return { sid: "CA_QUEUE_TEST" };
+  };
+  const app = buildServer({
+    openai: {
+      chat: {
+        completions: {
+          create: async ({ messages }) => {
+            receivedSystemPrompt = messages[0].content;
+            receivedUserPrompt = messages.at(-1).content;
+            return { choices: [{ message: { content: "这是本次授权回访。" } }] };
+          },
+        },
+      },
+    },
+    twilioClient: { calls },
+    twilioPhoneNumber: "+12565550100",
+    dashboardPassword: "queue-password",
+    productionDashboard: true,
+    queueIntervalSeconds: 5,
+  });
+  const response = await app.inject({
+    method: "POST",
+    url: "/api/queues",
+    headers: { authorization: "Bearer queue-password" },
+    payload: {
+      contacts: [{ name: "测试联系人", phone: "+85589503303", note: "测试备注" }],
+      context: "这是经过授权的康城通讯业务回访测试。",
+      intervalSeconds: 5,
+    },
+  });
+  assert.equal(response.statusCode, 201);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(callOptions.to, "+85589503303");
+  assert.equal(callOptions.from, "+12565550100");
+  assert.deepEqual(callOptions.statusCallbackEvent, [
+    "initiated",
+    "ringing",
+    "answered",
+    "completed",
+  ]);
+
+  const voiceUrl = new URL(callOptions.url);
+  const voice = await app.inject({
+    method: "POST",
+    url: `${voiceUrl.pathname}${voiceUrl.search}`,
+  });
+  assert.equal(voice.statusCode, 200);
+  assert.match(voice.body, /康城通讯的AI语音助理/);
+  assert.match(voice.body, /测试联系人/);
+  assert.doesNotMatch(voice.body, /刘宗宝/);
+
+  await app.ready();
+  const socket = await app.injectWS(`/ws?token=${voiceUrl.searchParams.get("token")}`);
+  socket.send(JSON.stringify({ type: "setup", callSid: "CA_DYNAMIC_CONTEXT" }));
+  const identityMessage = new Promise((resolve) => socket.once("message", resolve));
+  socket.send(JSON.stringify({ type: "prompt", voicePrompt: "是的", last: true }));
+  assert.match(JSON.parse((await identityMessage).toString()).token, /测试联系人/);
+
+  const llmMessages = [];
+  const llmFinished = new Promise((resolve) => {
+    socket.on("message", (message) => {
+      llmMessages.push(JSON.parse(message.toString()));
+      if (llmMessages.length === 2) resolve();
+    });
+  });
+  socket.send(JSON.stringify({ type: "prompt", voicePrompt: "方便", last: true }));
+  await llmFinished;
+  assert.match(receivedSystemPrompt, /经过授权的康城通讯业务回访测试/);
+  assert.match(receivedSystemPrompt, /测试备注/);
+  assert.equal(receivedUserPrompt, "方便");
+  const closed = new Promise((resolve) => socket.once("close", resolve));
+  socket.close();
+  await closed;
+  await app.close();
+});
+
 test("voice route returns ConversationRelay TwiML", async () => {
   const app = buildServer({ openai: null });
   const response = await app.inject({ method: "POST", url: "/voice" });

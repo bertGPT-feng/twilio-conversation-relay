@@ -41,7 +41,7 @@ const LOG_FILE = "/var/log/relay.log";
 
 const WELCOME_GREETING = "您好，这里是法院通知中心。我是小云，请问您是张伟先生吗？";
 
-const SYSTEM_PROMPT = `你是"法院通知中心"的 AI 语音客服，名叫小云。
+const SYSTEM_PROMPT = `你是"法院通知中心"的，名叫小云。
 
 ## 重要规则
 1. **永远用中文回复**

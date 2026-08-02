@@ -60,16 +60,22 @@ test("successful manual contact creation explicitly closes its dialog", async ()
   await app.close();
 });
 
-test("dashboard context is saved immediately and restored after refresh", async () => {
+test("dashboard preserves a separately edited context for every template", async () => {
   const app = buildServer({ openai: null });
   const response = await app.inject({ method: "GET", url: "/app.js" });
   assert.equal(response.statusCode, 200);
   assert.match(
     response.body,
-    /contextInput\.addEventListener\("input", \(\) => \{[\s\S]*?localStorage\.setItem\("kangcheng-context", contextInput\.value\);/,
+    /localStorage\.setItem\(contextStorageKey\(activeContextTemplate\), contextInput\.value\);/,
   );
-  assert.match(response.body, /if \(savedContext !== null\) contextInput\.value = savedContext;/);
-  assert.doesNotMatch(response.body, /contextInput\.saveTimer/);
+  assert.match(
+    response.body,
+    /contextInput\.value = savedContextFor\(activeContextTemplate\);/,
+  );
+  assert.match(
+    response.body,
+    /localStorage\.setItem\("kangcheng-context-template", activeContextTemplate\);/,
+  );
   await app.close();
 });
 

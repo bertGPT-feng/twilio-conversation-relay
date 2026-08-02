@@ -4,6 +4,19 @@ const templates = {
   custom: "",
 };
 
+const CONTEXT_STORAGE_PREFIX = "kangcheng-context:";
+let activeContextTemplate = localStorage.getItem("kangcheng-context-template") || "service";
+if (!(activeContextTemplate in templates)) activeContextTemplate = "service";
+
+function contextStorageKey(template) {
+  return `${CONTEXT_STORAGE_PREFIX}${template}`;
+}
+
+function savedContextFor(template) {
+  const saved = localStorage.getItem(contextStorageKey(template));
+  return saved === null ? templates[template] : saved;
+}
+
 const statusLabels = {
   pending: "等待拨打",
   dialing: "正在提交",
@@ -343,15 +356,18 @@ function updateContextCount() {
 }
 contextInput.addEventListener("input", () => {
   updateContextCount();
-  localStorage.setItem("kangcheng-context", contextInput.value);
+  localStorage.setItem(contextStorageKey(activeContextTemplate), contextInput.value);
   savedState.textContent = "已自动保存";
 });
 document.querySelectorAll(".chip").forEach((button) => button.addEventListener("click", () => {
   document.querySelectorAll(".chip").forEach((item) => item.classList.remove("active"));
   button.classList.add("active");
-  if (button.dataset.template !== "custom") contextInput.value = templates[button.dataset.template];
-  if (button.dataset.template === "custom") contextInput.select();
-  contextInput.dispatchEvent(new Event("input"));
+  activeContextTemplate = button.dataset.template;
+  localStorage.setItem("kangcheng-context-template", activeContextTemplate);
+  contextInput.value = savedContextFor(activeContextTemplate);
+  updateContextCount();
+  savedState.textContent = "已自动保存";
+  if (activeContextTemplate === "custom") contextInput.select();
 }));
 
 reviewButton.addEventListener("click", () => {
@@ -432,8 +448,18 @@ document.querySelector("#settingsButton").addEventListener("click", () =>
   showToast("账号密钥由 Railway 环境变量安全管理。")
 );
 
-const savedContext = localStorage.getItem("kangcheng-context");
-if (savedContext !== null) contextInput.value = savedContext;
+const legacySavedContext = localStorage.getItem("kangcheng-context");
+if (
+  activeContextTemplate === "service" &&
+  localStorage.getItem(contextStorageKey("service")) === null &&
+  legacySavedContext !== null
+) {
+  localStorage.setItem(contextStorageKey("service"), legacySavedContext);
+}
+document.querySelectorAll(".chip").forEach((button) =>
+  button.classList.toggle("active", button.dataset.template === activeContextTemplate)
+);
+contextInput.value = savedContextFor(activeContextTemplate);
 updateContextCount();
 render();
 

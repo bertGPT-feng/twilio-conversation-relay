@@ -60,6 +60,19 @@ test("successful manual contact creation explicitly closes its dialog", async ()
   await app.close();
 });
 
+test("dashboard context is saved immediately and restored after refresh", async () => {
+  const app = buildServer({ openai: null });
+  const response = await app.inject({ method: "GET", url: "/app.js" });
+  assert.equal(response.statusCode, 200);
+  assert.match(
+    response.body,
+    /contextInput\.addEventListener\("input", \(\) => \{[\s\S]*?localStorage\.setItem\("kangcheng-context", contextInput\.value\);/,
+  );
+  assert.match(response.body, /if \(savedContext !== null\) contextInput\.value = savedContext;/);
+  assert.doesNotMatch(response.body, /contextInput\.saveTimer/);
+  await app.close();
+});
+
 test("production dashboard requires its management password", async () => {
   const app = buildServer({
     openai: null,

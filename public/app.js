@@ -343,12 +343,8 @@ function updateContextCount() {
 }
 contextInput.addEventListener("input", () => {
   updateContextCount();
-  savedState.textContent = "保存中…";
-  clearTimeout(contextInput.saveTimer);
-  contextInput.saveTimer = setTimeout(() => {
-    localStorage.setItem("kangcheng-context", contextInput.value);
-    savedState.textContent = "已自动保存";
-  }, 450);
+  localStorage.setItem("kangcheng-context", contextInput.value);
+  savedState.textContent = "已自动保存";
 });
 document.querySelectorAll(".chip").forEach((button) => button.addEventListener("click", () => {
   document.querySelectorAll(".chip").forEach((item) => item.classList.remove("active"));
@@ -437,7 +433,7 @@ document.querySelector("#settingsButton").addEventListener("click", () =>
 );
 
 const savedContext = localStorage.getItem("kangcheng-context");
-if (savedContext) contextInput.value = savedContext;
+if (savedContext !== null) contextInput.value = savedContext;
 updateContextCount();
 render();
 

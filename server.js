@@ -236,7 +236,7 @@ export async function streamAIResponse(
       model: LLM_MODEL,
       messages: [{ role: "system", content: systemPrompt }, ...conversation.slice(-10)],
       temperature: 0.6,
-      max_tokens: 240,
+      max_tokens: Number(process.env.LLM_MAX_TOKENS) || 512,
       stream: true,
     },
     { signal },
@@ -370,7 +370,7 @@ export function buildServer({
   dashboardPassword = process.env.DASHBOARD_PASSWORD || "",
   productionDashboard = Boolean(process.env.RAILWAY_ENVIRONMENT),
   welcomeInterruptDelayMs = 1200,
-  llmFirstTokenTimeoutMs = 1500,
+  llmFirstTokenTimeoutMs = Number(process.env.LLM_FIRST_TOKEN_TIMEOUT_MS) || 10000,
   queueIntervalSeconds = DEFAULT_QUEUE_INTERVAL_SECONDS,
 } = {}) {
   const fastify = Fastify({ logger: false });

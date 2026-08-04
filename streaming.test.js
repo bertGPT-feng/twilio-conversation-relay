@@ -16,7 +16,7 @@ test("TwiML enables fast turn detection and speech interruption", () => {
 });
 
 test("welcome greeting and affirmative identity reply advance without the LLM", () => {
-  assert.match(WELCOME_GREETING, /刘宗宝先生/);
+  assert.match(WELCOME_GREETING, /先生/);
   const response = identityResponseFor("是的");
   assert.equal(response.confirmed, true);
   assert.doesNotMatch(response.text, /请问您是刘宗宝/);

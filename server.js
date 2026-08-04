@@ -17,7 +17,7 @@ const BASE_URL = DOMAIN ? `https://${DOMAIN}` : `http://localhost:${PORT}`;
 const WS_URL = DOMAIN ? `wss://${DOMAIN}/ws` : "";
 const USE_DEEPSEEK_OFFICIAL = Boolean(process.env.DEEPSEEK_API_KEY);
 const LLM_MODEL = USE_DEEPSEEK_OFFICIAL
-  ? process.env.DEEPSEEK_MODEL || "deepseek-v4-flash"
+  ? process.env.DEEPSEEK_MODEL || "deepseek-chat"
   : process.env.LLM_MODEL || "deepseek/deepseek-v4-flash";
 const LOG_FILE = "/tmp/relay_debug.log";
 const PUBLIC_DIR = new URL("./public/", import.meta.url);

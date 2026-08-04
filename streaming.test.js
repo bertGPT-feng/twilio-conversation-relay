@@ -16,10 +16,10 @@ test("TwiML enables fast turn detection and speech interruption", () => {
 });
 
 test("welcome greeting and affirmative identity reply advance without the LLM", () => {
-  assert.match(WELCOME_GREETING, /先生/);
+  assert.match(WELCOME_GREETING, /x先生/);
   const response = identityResponseFor("是的");
   assert.equal(response.confirmed, true);
-  assert.doesNotMatch(response.text, /请问您是刘宗宝/);
+  assert.doesNotMatch(response.text, /请问您是xxx/);
   assert.match(response.text, /民事判决书/);
   assert.match(response.text, /送达流程吗？$/);
 });
@@ -27,7 +27,7 @@ test("welcome greeting and affirmative identity reply advance without the LLM", 
 test("unclear identity reply asks once more without disclosing case details", () => {
   const response = identityResponseFor("喂，你说什么");
   assert.equal(response.confirmed, null);
-  assert.match(response.text, /刘宗宝先生本人吗？$/);
+  assert.match(response.text, /xxx先生本人吗？$/);
   assert.doesNotMatch(response.text, /案号|判决书/);
 });
 
@@ -56,7 +56,7 @@ test("STT near-matches are accepted only in a matching conversation context", ()
       content: "请问您现在方便了解送达流程吗？",
     },
   ];
-  assert.match(localResponseFor("旁边", convenienceContext), /演示送达通知/);
+  assert.match(localResponseFor("方便", convenienceContext), /演示送达通知/);
   assert.match(localResponseFor("我说方便", convenienceContext), /演示送达通知/);
   assert.equal(localResponseFor("旁边", []), null);
 
@@ -118,7 +118,7 @@ test("streams complete LLM sentences and marks only the final sentence", async (
         create: async () => ({
           async *[Symbol.asyncIterator]() {
             yield { choices: [{ delta: { content: "您好，" } }] };
-            yield { choices: [{ delta: { content: "刘先生。" } }] };
+            yield { choices: [{ delta: { content: "x先生。" } }] };
           },
         }),
       },

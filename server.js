@@ -664,7 +664,7 @@ export function buildServer({
       }
       const wsQuery = token ? `?token=${encodeURIComponent(token)}` : "";
       const greeting = callContext?.name
-        ? `您好，我是康城通讯的AI语音助理。请问您是${callContext.name}吗？`
+        ? `您好，我是xxxxxx。请问您是${callContext.name}吗？`
         : WELCOME_GREETING;
       return reply
         .type("text/xml")

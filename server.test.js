@@ -15,7 +15,7 @@ test("generates Chinese ConversationRelay TwiML without ElevenLabs", () => {
 
 test("system prompt preserves the configured role and safety boundaries", () => {
   assert.match(SYSTEM_PROMPT, /法院通知中心/);
-  assert.match(SYSTEM_PROMPT, /刘宗宝/);
+  assert.match(SYSTEM_PROMPT, /xxx/);
   assert.match(SYSTEM_PROMPT, /（2026）京01民初123号/);
   assert.match(SYSTEM_PROMPT, /不要求转账或付款/);
 });

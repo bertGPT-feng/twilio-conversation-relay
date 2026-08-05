@@ -4,6 +4,7 @@ import {
   conversationRelayTwiml,
   identityResponseFor,
   localResponseFor,
+  stripLeadingFiller,
   streamAIResponse,
   WELCOME_GREETING,
 } from "./server.js";
@@ -68,6 +69,15 @@ test("STT near-matches are accepted only in a matching conversation context", ()
     },
   ];
   assert.match(localResponseFor("都不方便", deliveryChoiceContext), /官方渠道/);
+});
+
+test("strips leading pleasantry prefixes from LLM output", () => {
+  assert.equal(
+    stripLeadingFiller("好的，我为您说明一下。这里是通知内容。"),
+    "这里是通知内容。",
+  );
+  assert.equal(stripLeadingFiller("好的。这里是通知内容。"), "这里是通知内容。");
+  assert.equal(stripLeadingFiller("这里是通知内容。"), "这里是通知内容。");
 });
 
 test("scripted delivery questions stay local and within configured facts", () => {

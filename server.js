@@ -205,6 +205,19 @@ export function localResponseFor(input, conversation = []) {
   return null;
 }
 
+const LEADING_FILLER_PATTERN =
+  /^(好的，我为您说明一下[。，,]*|好的[，。！!]?|行[，。！!]?|嗯[，。！!]?)+/;
+
+export function stripLeadingFiller(text) {
+  let cleaned = String(text || "").trim();
+  while (true) {
+    const next = cleaned.replace(LEADING_FILLER_PATTERN, "").trim();
+    if (!next || next === cleaned) break;
+    cleaned = next;
+  }
+  return cleaned;
+}
+
 function dynamicLocalResponseFor(input) {
   const text = String(input || "")
     .replace(/[\s，。！？,.!?]/g, "")
@@ -249,8 +262,9 @@ export async function streamAIResponse(
   if (!response?.[Symbol.asyncIterator]) {
     const text = response?.choices?.[0]?.message?.content;
     if (!text) throw new Error("LLM 返回空内容");
-    await onToken(text, true);
-    return text;
+    const cleaned = stripLeadingFiller(text);
+    if (cleaned) await onToken(cleaned, true);
+    return cleaned;
   }
 
   let rawAnswer = "";
@@ -259,8 +273,10 @@ export async function streamAIResponse(
   let finishReason = null;
 
   async function emitSentence(sentence) {
-    await onToken(sentence, false);
-    spokenAnswer += sentence;
+    const cleaned = stripLeadingFiller(sentence);
+    if (!cleaned) return;
+    await onToken(cleaned, false);
+    spokenAnswer += cleaned;
   }
 
   for await (const chunk of response) {

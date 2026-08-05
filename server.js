@@ -257,14 +257,18 @@ export async function streamAIResponse(
   systemPrompt = SYSTEM_PROMPT,
 ) {
   if (!openai) throw new Error("OPENAI_API_KEY 未配置");
+  const requestBody = {
+    model: LLM_MODEL,
+    messages: [{ role: "system", content: systemPrompt }, ...conversation.slice(-10)],
+    temperature: 0.6,
+    max_tokens: Number(process.env.LLM_MAX_TOKENS) || 512,
+    stream: true,
+  };
+  if (USE_NVIDIA) {
+    requestBody.chat_template_kwargs = { enable_thinking: false };
+  }
   const response = await openai.chat.completions.create(
-    {
-      model: LLM_MODEL,
-      messages: [{ role: "system", content: systemPrompt }, ...conversation.slice(-10)],
-      temperature: 0.6,
-      max_tokens: Number(process.env.LLM_MAX_TOKENS) || 512,
-      stream: true,
-    },
+    requestBody,
     { signal },
   );
 

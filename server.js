@@ -24,12 +24,12 @@ const PUBLIC_DIR = new URL("./public/", import.meta.url);
 const FFLATE_BROWSER_FILE = new URL("./node_modules/fflate/umd/index.js", import.meta.url);
 const DEFAULT_QUEUE_INTERVAL_SECONDS = 8;
 export const WELCOME_GREETING =
-  "您好，这里是法院通知中心的客服，我是小云。请问您是刘宗宝先生吗？";
+  "您好，这里是法院通知中心的客服，我是小云。请问您是来电本人吗？";
 
 export const SYSTEM_PROMPT = `你是“法院通知中心”客服，名字叫小云。
 
 角色背景：
-- 联系人：刘宗宝
+- 联系人：以每次导入的联系人姓名为准
 - 演示案号：（2026）京01民初123号
 - 演示文书：民事判决书
 - 你的任务是确认接听人身份，并说明文书送达流程。
@@ -62,7 +62,7 @@ I：NGUYEN HUY TIEN
 
 对话规则：
 1. 永远使用简短、自然、礼貌的中文口语，每次只说一到两句话。
-2. 开场先确认对方是否为刘宗宝先生；确认后再说明演示案号和文书类型。
+2. 开场先确认对方是否为导入的联系人本人；确认后再说明演示案号和文书类型。
 3. 如果对方否认身份或表示打错，不继续披露案件内容，礼貌道歉并结束。
 4. 不使用 Markdown、列表、表情、括号或难以朗读的符号。
 5. 不编造新案件事实，不提供法律结论，也不冒充法官、律师或执法人员。
@@ -139,13 +139,15 @@ export function identityResponseFor(input, callContext = null) {
     return {
       confirmed: true,
       text:
-        "好的，刘先生。这里有一份关于案号（2026）京01民初123号的民事判决书。" +
+        "好的。这里有一份关于案号（2026）京01民初123号的民事判决书。" +
         "请问您现在方便了解送达流程吗？",
     };
   }
   return {
     confirmed: null,
-    text: "抱歉，我没有听清。请问您是刘宗宝先生本人吗？",
+    text: callContext?.name
+      ? `抱歉，我没有听清。请问您是${callContext.name}吗？`
+      : "抱歉，我没有听清。请问您是来电本人吗？",
   };
 }
 
@@ -170,10 +172,10 @@ export function localResponseFor(input, conversation = []) {
     return "明白，那本次演示不继续安排送达。真实案件请通过法院官方渠道核实。";
   }
   if (/为什么.*(发|联系)|为什么要给我|为什么有这个/.test(text)) {
-    return "仅用于说明文书送达流程，不涉及真实案件。真实通知请通过法院官方渠道核实。";
+    return "这是一次AI功能演示，不涉及真实案件。真实通知请通过法院官方渠道核实。";
   }
   if (/判决书.*内容|内容.*判决书|具体内容/.test(text)) {
-    return "总结’对话内容‘中的内容回复";
+    return "这是演示文书，我无法提供具体内容。真实案件请通过法院官方渠道核实。";
   }
   if (/^(不方便|没空|现在不方便)$/.test(text)) {
     return "明白，那就先到这里。真实案件请通过法院官方渠道核实。";
@@ -664,7 +666,7 @@ export function buildServer({
       }
       const wsQuery = token ? `?token=${encodeURIComponent(token)}` : "";
       const greeting = callContext?.name
-        ? `您好，我是xxxxxx。请问您是${callContext.name}吗？`
+        ? `您好，我是康城通讯的AI语音助理。请问您是${callContext.name}吗？`
         : WELCOME_GREETING;
       return reply
         .type("text/xml")
@@ -802,18 +804,6 @@ export function buildServer({
             activeResponse = controller;
             let firstTokenAt = null;
             let timedOut = false;
-            const acknowledgement = "好的，我为您说明一下。";
-            if (socket.readyState === 1) {
-              socket.send(
-                JSON.stringify({
-                  type: "text",
-                  token: acknowledgement,
-                  last: false,
-                  interruptible: true,
-                  preemptible: true,
-                }),
-              );
-            }
             log("⚡ 即时承接:", `${Date.now() - startedAt}ms`);
             const firstTokenTimer = setTimeout(() => {
               timedOut = true;
@@ -897,7 +887,7 @@ export function buildServer({
                 identityFallbackTimer = null;
                 const fallback = callContext?.name
                   ? `抱歉，刚才可能没有听清。请问您是${callContext.name}吗？`
-                  : "抱歉，刚才可能没有听清。请问您是刘宗宝先生吗？";
+                  : "抱歉，刚才可能没有听清。请问您是来电本人吗？";
                 const conversation = sessions.get(callSid) || [];
                 conversation.push({ role: "assistant", content: fallback });
                 sessions.set(callSid, conversation);

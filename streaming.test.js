@@ -16,10 +16,11 @@ test("TwiML enables fast turn detection and speech interruption", () => {
 });
 
 test("welcome greeting and affirmative identity reply advance without the LLM", () => {
-  assert.match(WELCOME_GREETING, /x先生/);
+  assert.match(WELCOME_GREETING, /来电本人/);
+  assert.doesNotMatch(WELCOME_GREETING, /刘宗宝/);
   const response = identityResponseFor("是的");
   assert.equal(response.confirmed, true);
-  assert.doesNotMatch(response.text, /请问您是xxx/);
+  assert.doesNotMatch(response.text, /来电本人/);
   assert.match(response.text, /民事判决书/);
   assert.match(response.text, /送达流程吗？$/);
 });
@@ -27,7 +28,7 @@ test("welcome greeting and affirmative identity reply advance without the LLM", 
 test("unclear identity reply asks once more without disclosing case details", () => {
   const response = identityResponseFor("喂，你说什么");
   assert.equal(response.confirmed, null);
-  assert.match(response.text, /xxx先生本人吗？$/);
+  assert.match(response.text, /来电本人吗？$/);
   assert.doesNotMatch(response.text, /案号|判决书/);
 });
 
@@ -130,9 +131,9 @@ test("streams complete LLM sentences and marks only the final sentence", async (
     [{ role: "user", content: "是的" }],
     async (token, last) => tokens.push({ token, last }),
   );
-  assert.equal(answer, "您好，刘先生。");
+  assert.equal(answer, "您好，x先生。");
   assert.deepEqual(tokens, [
-    { token: "您好，刘先生。", last: false },
+    { token: "您好，x先生。", last: false },
     { token: "", last: true },
   ]);
 });
@@ -143,7 +144,7 @@ test("replaces a long incomplete tail with a complete spoken fallback", async ()
       completions: {
         create: async () => ({
           async *[Symbol.asyncIterator]() {
-            yield { choices: [{ delta: { content: "刘先生，具体内容请查看文书。" } }] };
+            yield { choices: [{ delta: { content: "x先生，具体内容请查看文书。" } }] };
             yield { choices: [{ delta: { content: "如有问题请联系您的" } }] };
             yield { choices: [{ delta: {}, finish_reason: "length" }] };
           },
@@ -157,10 +158,10 @@ test("replaces a long incomplete tail with a complete spoken fallback", async ()
   );
   assert.equal(
     answer,
-    "刘先生，具体内容请查看文书。后续信息需要通过官方渠道确认。请问您需要我重新说明吗？",
+    "x先生，具体内容请查看文书。后续信息需要通过官方渠道确认。请问您需要我重新说明吗？",
   );
   assert.deepEqual(tokens, [
-    { token: "刘先生，具体内容请查看文书。", last: false },
+    { token: "x先生，具体内容请查看文书。", last: false },
     {
       token: "后续信息需要通过官方渠道确认。请问您需要我重新说明吗？",
       last: true,

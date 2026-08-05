@@ -15,7 +15,7 @@ test("generates Chinese ConversationRelay TwiML without ElevenLabs", () => {
 
 test("system prompt preserves the configured role and safety boundaries", () => {
   assert.match(SYSTEM_PROMPT, /法院通知中心/);
-  assert.match(SYSTEM_PROMPT, /xxx/);
+  assert.match(SYSTEM_PROMPT, /以每次导入的联系人姓名为准/);
   assert.match(SYSTEM_PROMPT, /（2026）京01民初123号/);
   assert.match(SYSTEM_PROMPT, /不要求转账或付款/);
 });
@@ -170,15 +170,11 @@ test("dashboard queue starts one Twilio call with dynamic contact context", asyn
   socket.send(JSON.stringify({ type: "prompt", voicePrompt: "是的", last: true }));
   assert.match(JSON.parse((await identityMessage).toString()).token, /测试联系人/);
 
-  const llmMessages = [];
-  const llmFinished = new Promise((resolve) => {
-    socket.on("message", (message) => {
-      llmMessages.push(JSON.parse(message.toString()));
-      if (llmMessages.length === 2) resolve();
-    });
-  });
+  const llmResponse = new Promise((resolve) => socket.once("message", resolve));
   socket.send(JSON.stringify({ type: "prompt", voicePrompt: "方便", last: true }));
-  await llmFinished;
+  const llmMessage = JSON.parse((await llmResponse).toString());
+  assert.equal(llmMessage.token, "这是本次授权回访。");
+  assert.equal(llmMessage.last, true);
   assert.match(receivedSystemPrompt, /经过授权的康城通讯业务回访测试/);
   assert.match(receivedSystemPrompt, /测试备注/);
   assert.equal(receivedUserPrompt, "方便");
@@ -219,13 +215,7 @@ test("ConversationRelay confirms identity before sending a complex prompt to the
   assert.match(identityMessage.token, /民事判决书/);
   assert.equal(identityMessage.last, true);
 
-  const llmMessages = [];
-  const llmResponse = new Promise((resolve) => {
-    socket.on("message", (message) => {
-      llmMessages.push(JSON.parse(message.toString()));
-      if (llmMessages.length === 2) resolve();
-    });
-  });
+  const llmResponse = new Promise((resolve) => socket.once("message", resolve));
   socket.send(
     JSON.stringify({
       type: "prompt",
@@ -233,10 +223,8 @@ test("ConversationRelay confirms identity before sending a complex prompt to the
       last: true,
     }),
   );
-  await llmResponse;
-  assert.match(llmMessages[0].token, /为您说明/);
-  assert.equal(llmMessages[0].last, false);
-  assert.deepEqual(llmMessages[1], {
+  const llmMessage = JSON.parse((await llmResponse).toString());
+  assert.deepEqual(llmMessage, {
     type: "text",
     token: "这是演示送达流程说明。",
     last: true,
@@ -270,7 +258,7 @@ test("welcome interruption without a final prompt receives an identity fallback"
   );
 
   const message = JSON.parse((await response).toString());
-  assert.match(message.token, /请问您是刘宗宝先生吗？$/);
+  assert.match(message.token, /请问您是来电本人吗？$/);
   assert.equal(message.last, true);
 
   const closed = new Promise((resolve) => socket.once("close", resolve));
@@ -279,7 +267,7 @@ test("welcome interruption without a final prompt receives an identity fallback"
   await app.close();
 });
 
-test("slow LLM receives an immediate acknowledgement and a bounded fallback", async () => {
+test("slow LLM receives a bounded fallback without an acknowledgement prefix", async () => {
   const openai = {
     chat: {
       completions: {
@@ -317,10 +305,8 @@ test("slow LLM receives an immediate acknowledgement and a bounded fallback", as
   );
   await new Promise((resolve) => setTimeout(resolve, 50));
 
-  assert.match(messages[0].token, /为您说明/);
-  assert.equal(messages[0].last, false);
-  assert.match(messages[1].token, /官方渠道/);
-  assert.equal(messages[1].last, true);
+  assert.match(messages[0].token, /官方渠道/);
+  assert.equal(messages[0].last, true);
 
   const closed = new Promise((resolve) => socket.once("close", resolve));
   socket.close();

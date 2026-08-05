@@ -15,10 +15,13 @@ const DOMAIN = (process.env.DOMAIN || process.env.RAILWAY_PUBLIC_DOMAIN || "")
   .replace(/\/+$/, "");
 const BASE_URL = DOMAIN ? `https://${DOMAIN}` : `http://localhost:${PORT}`;
 const WS_URL = DOMAIN ? `wss://${DOMAIN}/ws` : "";
-const USE_DEEPSEEK_OFFICIAL = Boolean(process.env.DEEPSEEK_API_KEY);
-const LLM_MODEL = USE_DEEPSEEK_OFFICIAL
-  ? process.env.DEEPSEEK_MODEL || "deepseek-chat"
-  : process.env.LLM_MODEL || "deepseek/deepseek-v4-flash";
+const USE_NVIDIA = Boolean(process.env.NVIDIA_API_KEY);
+const USE_DEEPSEEK_OFFICIAL = Boolean(process.env.DEEPSEEK_API_KEY) && !USE_NVIDIA;
+const LLM_MODEL = USE_NVIDIA
+  ? process.env.NVIDIA_MODEL || "nvidia/nemotron-3-nano-30b-a3b"
+  : USE_DEEPSEEK_OFFICIAL
+    ? process.env.DEEPSEEK_MODEL || "deepseek-chat"
+    : process.env.LLM_MODEL || "deepseek/deepseek-v4-flash";
 const LOG_FILE = "/tmp/relay_debug.log";
 const PUBLIC_DIR = new URL("./public/", import.meta.url);
 const FFLATE_BROWSER_FILE = new URL("./node_modules/fflate/umd/index.js", import.meta.url);
@@ -229,13 +232,20 @@ function dynamicLocalResponseFor(input) {
 }
 
 function createOpenAIClient() {
-  const apiKey = process.env.DEEPSEEK_API_KEY || process.env.OPENAI_API_KEY;
+  const apiKey =
+    process.env.NVIDIA_API_KEY ||
+    process.env.DEEPSEEK_API_KEY ||
+    process.env.OPENAI_API_KEY;
   if (!apiKey) return null;
+  let baseURL = process.env.OPENAI_BASE_URL;
+  if (USE_NVIDIA) {
+    baseURL = process.env.NVIDIA_BASE_URL || "https://integrate.api.nvidia.com/v1";
+  } else if (USE_DEEPSEEK_OFFICIAL) {
+    baseURL = "https://api.deepseek.com";
+  }
   return new OpenAI({
     apiKey,
-    baseURL: USE_DEEPSEEK_OFFICIAL
-      ? "https://api.deepseek.com"
-      : process.env.OPENAI_BASE_URL,
+    baseURL,
   });
 }
 

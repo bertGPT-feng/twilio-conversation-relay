@@ -12,6 +12,9 @@
 - 显示排队、响铃、通话中、完成、占线、无人接听和失败状态
 - 每批拨号前确认完整号码范围和联系人授权
 - Railway 生产环境必须配置管理密码
+- Deepgram Flux 语义轮次检测，默认 700ms 结束语音等待
+- LLM 完整短句流式发送，支持用户插话后取消旧回答
+- `/api/metrics` 提供最近 100 次模型首 Token 与总响应耗时
 
 ## Railway 一键部署
 
@@ -41,6 +44,10 @@ git push -u origin main
 | `TWILIO_ACCOUNT_SID` | Twilio Account SID |
 | `TWILIO_AUTH_TOKEN` | Twilio Auth Token |
 | `TWILIO_PHONE_NUMBER` | Twilio 外呼号码，E.164 格式 |
+| `TWILIO_SPEECH_MODEL` | 推荐 `flux`；若账号暂未开放可回退 `nova-2-general` |
+| `TWILIO_SPEECH_TIMEOUT_MS` | 默认 `700`，可按用户语速调至 `500`–`1200` |
+| `TWILIO_TTS_PROVIDER` | 默认 `Amazon`，也可测试 `Google` 或已开通的 `ElevenLabs` |
+| `TWILIO_TTS_VOICE` | 必须与 TTS 提供商及中文语言匹配 |
 | `DASHBOARD_USERNAME` | 康城通讯网页管理账号 |
 | `DASHBOARD_PASSWORD` | 康城通讯网页管理密码 |
 | `DOMAIN` | Railway 生成的公网域名，不含路径 |
@@ -56,6 +63,9 @@ git push -u origin main
 ConversationRelay 会把用户语音实时转成文字并通过 WebSocket 发送给本服务；
 服务返回的 LLM 文本由 Twilio 播放。每通电话结束后，Twilio 状态回调会更新网页
 并在设定间隔后启动下一位联系人。
+
+生产调优时查看受管理密码保护的 `/api/metrics`。优先把首 Token 控制在
+1200ms 内；如果延迟偏高，先检查模型首 Token，再检查 Railway 到 Twilio 的网络位置。
 
 ## 本地开发
 

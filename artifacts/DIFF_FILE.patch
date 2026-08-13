@@ -1,0 +1,257 @@
+diff --git a/.env.example b/.env.example
+index e951715..976a136 100644
+--- a/.env.example
++++ b/.env.example
+@@ -25,6 +25,13 @@ TWILIO_ACCOUNT_SID=
+ TWILIO_AUTH_TOKEN=
+ TWILIO_PHONE_NUMBER=
+ 
++# ConversationRelay 低延迟语音配置
++TWILIO_STT_PROVIDER=Deepgram
++TWILIO_SPEECH_MODEL=flux
++TWILIO_SPEECH_TIMEOUT_MS=700
++TWILIO_TTS_PROVIDER=Amazon
++TWILIO_TTS_VOICE=Zhiyu-Neural
++
+ # ===== 工作台管理 =====
+ DASHBOARD_USERNAME=admin
+ DASHBOARD_PASSWORD=
+diff --git a/README.md b/README.md
+index 60558f3..76b5ecc 100644
+--- a/README.md
++++ b/README.md
+@@ -12,6 +12,9 @@
+ - 显示排队、响铃、通话中、完成、占线、无人接听和失败状态
+ - 每批拨号前确认完整号码范围和联系人授权
+ - Railway 生产环境必须配置管理密码
++- Deepgram Flux 语义轮次检测，默认 700ms 结束语音等待
++- LLM 完整短句流式发送，支持用户插话后取消旧回答
++- `/api/metrics` 提供最近 100 次模型首 Token 与总响应耗时
+ 
+ ## Railway 一键部署
+ 
+@@ -41,6 +44,10 @@ git push -u origin main
+ | `TWILIO_ACCOUNT_SID` | Twilio Account SID |
+ | `TWILIO_AUTH_TOKEN` | Twilio Auth Token |
+ | `TWILIO_PHONE_NUMBER` | Twilio 外呼号码，E.164 格式 |
++| `TWILIO_SPEECH_MODEL` | 推荐 `flux`；若账号暂未开放可回退 `nova-2-general` |
++| `TWILIO_SPEECH_TIMEOUT_MS` | 默认 `700`，可按用户语速调至 `500`–`1200` |
++| `TWILIO_TTS_PROVIDER` | 默认 `Amazon`，也可测试 `Google` 或已开通的 `ElevenLabs` |
++| `TWILIO_TTS_VOICE` | 必须与 TTS 提供商及中文语言匹配 |
+ | `DASHBOARD_USERNAME` | 康城通讯网页管理账号 |
+ | `DASHBOARD_PASSWORD` | 康城通讯网页管理密码 |
+ | `DOMAIN` | Railway 生成的公网域名，不含路径 |
+@@ -57,6 +64,9 @@ ConversationRelay 会把用户语音实时转成文字并通过 WebSocket 发送
+ 服务返回的 LLM 文本由 Twilio 播放。每通电话结束后，Twilio 状态回调会更新网页
+ 并在设定间隔后启动下一位联系人。
+ 
++生产调优时查看受管理密码保护的 `/api/metrics`。优先把首 Token 控制在
++1200ms 内；如果延迟偏高，先检查模型首 Token，再检查 Railway 到 Twilio 的网络位置。
++
+ ## 本地开发
+ 
+ ```bash
+diff --git a/server.js b/server.js
+index 5695a9a..90d298a 100644
+--- a/server.js
++++ b/server.js
+@@ -26,6 +26,11 @@ const LOG_FILE = "/tmp/relay_debug.log";
+ const PUBLIC_DIR = new URL("./public/", import.meta.url);
+ const FFLATE_BROWSER_FILE = new URL("./node_modules/fflate/umd/index.js", import.meta.url);
+ const DEFAULT_QUEUE_INTERVAL_SECONDS = 8;
++const DEFAULT_TRANSCRIPTION_PROVIDER = process.env.TWILIO_STT_PROVIDER || "Deepgram";
++const DEFAULT_SPEECH_MODEL = process.env.TWILIO_SPEECH_MODEL || "flux";
++const DEFAULT_TTS_PROVIDER = process.env.TWILIO_TTS_PROVIDER || "Amazon";
++const DEFAULT_TTS_VOICE = process.env.TWILIO_TTS_VOICE || "Zhiyu-Neural";
++const DEFAULT_SPEECH_TIMEOUT_MS = Number(process.env.TWILIO_SPEECH_TIMEOUT_MS) || 700;
+ export const WELCOME_GREETING =
+   "您好，这里是法院通知中心的客服，我是小云。请问您是来电本人吗？";
+ 
+@@ -98,23 +103,31 @@ function escapeXml(value) {
+ 
+ export function conversationRelayTwiml(
+   wsUrl = WS_URL,
+-  { welcomeGreeting = WELCOME_GREETING } = {},
++  {
++    welcomeGreeting = WELCOME_GREETING,
++    baseUrl = BASE_URL,
++    transcriptionProvider = DEFAULT_TRANSCRIPTION_PROVIDER,
++    speechModel = DEFAULT_SPEECH_MODEL,
++    ttsProvider = DEFAULT_TTS_PROVIDER,
++    voice = DEFAULT_TTS_VOICE,
++    speechTimeoutMs = DEFAULT_SPEECH_TIMEOUT_MS,
++  } = {},
+ ) {
+   if (!wsUrl) throw new Error("DOMAIN or RAILWAY_PUBLIC_DOMAIN is required");
+   return `<?xml version="1.0" encoding="UTF-8"?>
+ <Response>
+-  <Connect action="${escapeXml(BASE_URL)}/relay-ended">
++  <Connect action="${escapeXml(baseUrl)}/relay-ended">
+     <ConversationRelay
+       url="${escapeXml(wsUrl)}"
+       welcomeGreeting="${escapeXml(welcomeGreeting)}"
+       language="zh-CN"
+       transcriptionLanguage="zh-CN"
+-      transcriptionProvider="Deepgram"
+-      speechModel="nova-2-general"
++      transcriptionProvider="${escapeXml(transcriptionProvider)}"
++      speechModel="${escapeXml(speechModel)}"
+       ttsLanguage="zh-CN"
+-      ttsProvider="Amazon"
+-      voice="Zhiyu-Neural"
+-      speechTimeout="900"
++      ttsProvider="${escapeXml(ttsProvider)}"
++      voice="${escapeXml(voice)}"
++      speechTimeout="${escapeXml(speechTimeoutMs)}"
+       interruptible="speech"
+       reportInputDuringAgentSpeech="speech"
+       welcomeGreetingInterruptible="speech">
+@@ -407,10 +420,13 @@ export function buildServer({
+   welcomeInterruptDelayMs = 1200,
+   llmFirstTokenTimeoutMs = Number(process.env.LLM_FIRST_TOKEN_TIMEOUT_MS) || 10000,
+   queueIntervalSeconds = DEFAULT_QUEUE_INTERVAL_SECONDS,
++  wsUrl = WS_URL,
++  baseUrl = BASE_URL,
+ } = {}) {
+   const fastify = Fastify({ logger: false });
+   const jobs = new Map();
+   const callContexts = new Map();
++  const latencySamples = [];
+   fastify.register(fastifyFormBody);
+   fastify.register(fastifyWebsocket);
+ 
+@@ -670,10 +686,35 @@ export function buildServer({
+   fastify.get("/health", async () => ({
+     ok: true,
+     mode: "conversation-relay",
+-    websocket: Boolean(WS_URL),
++    websocket: Boolean(wsUrl),
+     dashboard: true,
++    voiceProfile: {
++      transcriptionProvider: DEFAULT_TRANSCRIPTION_PROVIDER,
++      speechModel: DEFAULT_SPEECH_MODEL,
++      ttsProvider: DEFAULT_TTS_PROVIDER,
++      voice: DEFAULT_TTS_VOICE,
++      speechTimeoutMs: DEFAULT_SPEECH_TIMEOUT_MS,
++    },
+   }));
+ 
++  fastify.get("/api/metrics", async (request, reply) => {
++    if (!requireDashboard(request, reply)) return;
++    const recent = latencySamples.slice(-100);
++    const average = (field) => {
++      const values = recent.map((item) => item[field]).filter(Number.isFinite);
++      return values.length
++        ? Math.round(values.reduce((sum, value) => sum + value, 0) / values.length)
++        : null;
++    };
++    return {
++      samples: recent.length,
++      targetFirstTokenMs: 1200,
++      averageFirstTokenMs: average("firstTokenMs"),
++      averageTotalMs: average("totalMs"),
++      recent,
++    };
++  });
++
+   fastify.get("/logs", async (_request, reply) => {
+     try {
+       const lines = fs
+@@ -703,7 +744,12 @@ export function buildServer({
+         : WELCOME_GREETING;
+       return reply
+         .type("text/xml")
+-        .send(conversationRelayTwiml(`${WS_URL}${wsQuery}`, { welcomeGreeting: greeting }));
++        .send(
++          conversationRelayTwiml(`${wsUrl}${wsQuery}`, {
++            welcomeGreeting: greeting,
++            baseUrl,
++          }),
++        );
+     } catch (error) {
+       log("❌ TwiML:", error.message);
+       return reply.status(500).type("text/plain").send(error.message);
+@@ -870,6 +916,13 @@ export function buildServer({
+               if (controller.signal.aborted) return;
+               clearTimeout(firstTokenTimer);
+               conversation.push({ role: "assistant", content: answer });
++              latencySamples.push({
++                callSid,
++                at: new Date().toISOString(),
++                firstTokenMs: firstTokenAt ? firstTokenAt - startedAt : null,
++                totalMs: Date.now() - startedAt,
++              });
++              if (latencySamples.length > 500) latencySamples.splice(0, latencySamples.length - 500);
+               log("🤖 AI:", answer, `总耗时=${Date.now() - startedAt}ms`);
+             } catch (error) {
+               if (timedOut) {
+diff --git a/server.test.js b/server.test.js
+index 7b79787..e169d40 100644
+--- a/server.test.js
++++ b/server.test.js
+@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
+ import test from "node:test";
+ import { buildServer, conversationRelayTwiml, SYSTEM_PROMPT } from "./server.js";
+ 
+-test("generates Chinese ConversationRelay TwiML without ElevenLabs", () => {
++test("generates the low-latency Chinese ConversationRelay profile", () => {
+   const xml = conversationRelayTwiml("wss://relay.example.test/ws");
+   assert.match(xml, /url="wss:\/\/relay\.example\.test\/ws"/);
+   assert.match(xml, /language="zh-CN"/);
+   assert.match(xml, /transcriptionProvider="Deepgram"/);
+-  assert.match(xml, /speechModel="nova-2-general"/);
++  assert.match(xml, /speechModel="flux"/);
+   assert.match(xml, /ttsProvider="Amazon"/);
+   assert.match(xml, /voice="Zhiyu-Neural"/);
+   assert.doesNotMatch(xml, /ElevenLabs/i);
+@@ -185,7 +185,11 @@ test("dashboard queue starts one Twilio call with dynamic contact context", asyn
+ });
+ 
+ test("voice route returns ConversationRelay TwiML", async () => {
+-  const app = buildServer({ openai: null });
++  const app = buildServer({
++    openai: null,
++    wsUrl: "wss://relay.example.test/ws",
++    baseUrl: "https://relay.example.test",
++  });
+   const response = await app.inject({ method: "POST", url: "/voice" });
+   assert.equal(response.statusCode, 200);
+   assert.match(response.headers["content-type"], /^text\/xml/);
+@@ -193,6 +197,23 @@ test("voice route returns ConversationRelay TwiML", async () => {
+   await app.close();
+ });
+ 
++test("health exposes the active latency-optimized voice profile", async () => {
++  const app = buildServer({ openai: null });
++  const response = await app.inject({ method: "GET", url: "/health" });
++  assert.equal(response.json().voiceProfile.speechModel, "flux");
++  assert.equal(response.json().voiceProfile.speechTimeoutMs, 700);
++  await app.close();
++});
++
++test("metrics endpoint reports streaming first-token latency", async () => {
++  const app = buildServer({ openai: null });
++  const response = await app.inject({ method: "GET", url: "/api/metrics" });
++  assert.equal(response.statusCode, 200);
++  assert.equal(response.json().targetFirstTokenMs, 1200);
++  assert.equal(response.json().samples, 0);
++  await app.close();
++});
++
+ test("ConversationRelay confirms identity before sending a complex prompt to the LLM", async () => {
+   const openai = {
+     chat: {
+diff --git a/streaming.test.js b/streaming.test.js
+index 2573618..f377e2e 100644
+--- a/streaming.test.js
++++ b/streaming.test.js
+@@ -11,7 +11,8 @@ import {
+ 
+ test("TwiML enables fast turn detection and speech interruption", () => {
+   const xml = conversationRelayTwiml("wss://relay.example.test/ws");
+-  assert.match(xml, /speechTimeout="900"/);
++  assert.match(xml, /speechModel="flux"/);
++  assert.match(xml, /speechTimeout="700"/);
+   assert.match(xml, /interruptible="speech"/);
+   assert.match(xml, /reportInputDuringAgentSpeech="speech"/);
+ });

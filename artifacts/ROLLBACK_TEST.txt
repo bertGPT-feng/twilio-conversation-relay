@@ -1,0 +1,218 @@
+TAP version 13
+# ◇ injected env (0) from .env // tip: ⌘ suppress logs { quiet: true }
+# Subtest: generates Chinese ConversationRelay TwiML without ElevenLabs
+ok 1 - generates Chinese ConversationRelay TwiML without ElevenLabs
+  ---
+  duration_ms: 0.407666
+  type: 'test'
+  ...
+# Subtest: system prompt preserves the configured role and safety boundaries
+ok 2 - system prompt preserves the configured role and safety boundaries
+  ---
+  duration_ms: 0.098541
+  type: 'test'
+  ...
+# Subtest: health identifies the active ConversationRelay mode
+ok 3 - health identifies the active ConversationRelay mode
+  ---
+  duration_ms: 36.638584
+  type: 'test'
+  ...
+# Subtest: dashboard route serves the Kangcheng Communications workspace
+ok 4 - dashboard route serves the Kangcheng Communications workspace
+  ---
+  duration_ms: 2.27125
+  type: 'test'
+  ...
+# Subtest: contact dialog can be dismissed without triggering required-field validation
+ok 5 - contact dialog can be dismissed without triggering required-field validation
+  ---
+  duration_ms: 1.965958
+  type: 'test'
+  ...
+# Subtest: successful manual contact creation explicitly closes its dialog
+ok 6 - successful manual contact creation explicitly closes its dialog
+  ---
+  duration_ms: 2.068208
+  type: 'test'
+  ...
+# Subtest: dashboard preserves a separately edited context for every template
+ok 7 - dashboard preserves a separately edited context for every template
+  ---
+  duration_ms: 2.75875
+  type: 'test'
+  ...
+# Subtest: production dashboard requires its management password
+ok 8 - production dashboard requires its management password
+  ---
+  duration_ms: 1.952917
+  type: 'test'
+  ...
+# ▶️ 队列启动: 065e538c-21a2-40c9-be0d-0625d3cfb04d 联系人=1
+# 📤 队列拨号: 065e538c-21a2-40c9-be0d-0625d3cfb04d 5be81514-0435-4678-87f3-f24a8561b0ed CA_QUEUE_TEST
+# 🔌 WebSocket连接
+# 📞 Relay通话: CA_DYNAMIC_CONTEXT
+# 🗣️ 用户: 是的
+# ⚡ 本地首轮: 0ms
+# 🤖 本地: 好的，测试联系人。请问您现在方便听取本次通知吗？
+# 🗣️ 用户: 方便
+# ⚡ 即时承接: 0ms
+# ⚡ 首Token: 1ms
+# 🤖 AI: 这是本次授权回访。 总耗时=1ms
+# Subtest: dashboard queue starts one Twilio call with dynamic contact context
+ok 9 - dashboard queue starts one Twilio call with dynamic contact context
+  ---
+  duration_ms: 9.727917
+  type: 'test'
+  ...
+# ❌ TwiML: DOMAIN or RAILWAY_PUBLIC_DOMAIN is required
+# Subtest: voice route returns ConversationRelay TwiML
+not ok 10 - voice route returns ConversationRelay TwiML
+  ---
+  duration_ms: 3.245125
+  type: 'test'
+  location: '/private/tmp/conversation-relay-rollback.MEO4hc/repo/server.test.js:187:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    500 !== 200
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 200
+  actual: 500
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///private/tmp/conversation-relay-rollback.MEO4hc/repo/server.test.js:190:10)
+    process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# 🔌 WebSocket连接
+# 📞 Relay通话: CA_TEST
+# 🗣️ 用户: 是的
+# ⚡ 本地首轮: 0ms
+# 🤖 本地: 好的。这里有一份关于案号（2026）京01民初123号的民事判决书。请问您现在方便了解送达流程吗？
+# 🗣️ 用户: 请解释一个复杂问题
+# ⚡ 即时承接: 0ms
+# ⚡ 首Token: 0ms
+# 🤖 AI: 这是演示送达流程说明。 总耗时=0ms
+# Subtest: ConversationRelay confirms identity before sending a complex prompt to the LLM
+ok 11 - ConversationRelay confirms identity before sending a complex prompt to the LLM
+  ---
+  duration_ms: 4.897041
+  type: 'test'
+  ...
+# 🔌 WebSocket连接
+# 📞 Relay通话: CA_INTERRUPT_ONLY
+# ⏸️ 用户打断
+# ⚡ 开场打断兜底: 抱歉，刚才可能没有听清。请问您是来电本人吗？
+# Subtest: welcome interruption without a final prompt receives an identity fallback
+ok 12 - welcome interruption without a final prompt receives an identity fallback
+  ---
+  duration_ms: 9.059125
+  type: 'test'
+  ...
+# 🔌 WebSocket连接
+# 📞 Relay通话: CA_LLM_TIMEOUT
+# 🗣️ 用户: 是的
+# ⚡ 本地首轮: 0ms
+# 🤖 本地: 好的。这里有一份关于案号（2026）京01民初123号的民事判决书。请问您现在方便了解送达流程吗？
+# 🗣️ 用户: 请解释一个复杂问题
+# ⚡ 即时承接: 0ms
+# ⏱️ LLM首Token超时: 11ms
+# Subtest: slow LLM receives a bounded fallback without an acknowledgement prefix
+ok 13 - slow LLM receives a bounded fallback without an acknowledgement prefix
+  ---
+  duration_ms: 55.028166
+  type: 'test'
+  ...
+# ◇ injected env (0) from .env // tip: ⌘ enable debugging { debug: true }
+# Subtest: TwiML enables fast turn detection and speech interruption
+ok 14 - TwiML enables fast turn detection and speech interruption
+  ---
+  duration_ms: 0.385125
+  type: 'test'
+  ...
+# Subtest: welcome greeting and affirmative identity reply advance without the LLM
+ok 15 - welcome greeting and affirmative identity reply advance without the LLM
+  ---
+  duration_ms: 0.159292
+  type: 'test'
+  ...
+# Subtest: unclear identity reply asks once more without disclosing case details
+ok 16 - unclear identity reply asks once more without disclosing case details
+  ---
+  duration_ms: 0.08775
+  type: 'test'
+  ...
+# Subtest: common delivery intents are answered locally without the LLM
+ok 17 - common delivery intents are answered locally without the LLM
+  ---
+  duration_ms: 0.184916
+  type: 'test'
+  ...
+# Subtest: generic acknowledgement uses the previous assistant question
+ok 18 - generic acknowledgement uses the previous assistant question
+  ---
+  duration_ms: 0.057208
+  type: 'test'
+  ...
+# Subtest: STT near-matches are accepted only in a matching conversation context
+ok 19 - STT near-matches are accepted only in a matching conversation context
+  ---
+  duration_ms: 0.054333
+  type: 'test'
+  ...
+# Subtest: strips leading pleasantry prefixes from LLM output
+ok 20 - strips leading pleasantry prefixes from LLM output
+  ---
+  duration_ms: 0.100959
+  type: 'test'
+  ...
+# Subtest: scripted delivery questions stay local and within configured facts
+ok 21 - scripted delivery questions stay local and within configured facts
+  ---
+  duration_ms: 0.08125
+  type: 'test'
+  ...
+# 🧠 LLM结束: unknown 原始字符=12
+# 🧠 LLM结束: unknown 原始字符=7
+# 🧠 LLM结束: length 原始字符=23
+# ⚠️ 丢弃未完整结句: 如有问题请联系您的
+# 🧠 LLM结束: unknown 原始字符=1
+# ⚠️ 丢弃未完整结句: 好
+# Subtest: emits a completed first sentence before the stream finishes
+ok 22 - emits a completed first sentence before the stream finishes
+  ---
+  duration_ms: 3.798541
+  type: 'test'
+  ...
+# Subtest: streams complete LLM sentences and marks only the final sentence
+ok 23 - streams complete LLM sentences and marks only the final sentence
+  ---
+  duration_ms: 0.479167
+  type: 'test'
+  ...
+# Subtest: replaces a long incomplete tail with a complete spoken fallback
+ok 24 - replaces a long incomplete tail with a complete spoken fallback
+  ---
+  duration_ms: 0.280083
+  type: 'test'
+  ...
+# Subtest: passes an AbortSignal to the streaming provider
+ok 25 - passes an AbortSignal to the streaming provider
+  ---
+  duration_ms: 0.180875
+  type: 'test'
+  ...
+1..25
+# tests 25
+# suites 0
+# pass 24
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 295.784125

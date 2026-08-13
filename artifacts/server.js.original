@@ -26,11 +26,6 @@ const LOG_FILE = "/tmp/relay_debug.log";
 const PUBLIC_DIR = new URL("./public/", import.meta.url);
 const FFLATE_BROWSER_FILE = new URL("./node_modules/fflate/umd/index.js", import.meta.url);
 const DEFAULT_QUEUE_INTERVAL_SECONDS = 8;
-const DEFAULT_TRANSCRIPTION_PROVIDER = process.env.TWILIO_STT_PROVIDER || "Deepgram";
-const DEFAULT_SPEECH_MODEL = process.env.TWILIO_SPEECH_MODEL || "flux";
-const DEFAULT_TTS_PROVIDER = process.env.TWILIO_TTS_PROVIDER || "Amazon";
-const DEFAULT_TTS_VOICE = process.env.TWILIO_TTS_VOICE || "Zhiyu-Neural";
-const DEFAULT_SPEECH_TIMEOUT_MS = Number(process.env.TWILIO_SPEECH_TIMEOUT_MS) || 700;
 export const WELCOME_GREETING =
   "您好，这里是法院通知中心的客服，我是小云。请问您是来电本人吗？";
 
@@ -103,31 +98,23 @@ function escapeXml(value) {
 
 export function conversationRelayTwiml(
   wsUrl = WS_URL,
-  {
-    welcomeGreeting = WELCOME_GREETING,
-    baseUrl = BASE_URL,
-    transcriptionProvider = DEFAULT_TRANSCRIPTION_PROVIDER,
-    speechModel = DEFAULT_SPEECH_MODEL,
-    ttsProvider = DEFAULT_TTS_PROVIDER,
-    voice = DEFAULT_TTS_VOICE,
-    speechTimeoutMs = DEFAULT_SPEECH_TIMEOUT_MS,
-  } = {},
+  { welcomeGreeting = WELCOME_GREETING } = {},
 ) {
   if (!wsUrl) throw new Error("DOMAIN or RAILWAY_PUBLIC_DOMAIN is required");
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Connect action="${escapeXml(baseUrl)}/relay-ended">
+  <Connect action="${escapeXml(BASE_URL)}/relay-ended">
     <ConversationRelay
       url="${escapeXml(wsUrl)}"
       welcomeGreeting="${escapeXml(welcomeGreeting)}"
       language="zh-CN"
       transcriptionLanguage="zh-CN"
-      transcriptionProvider="${escapeXml(transcriptionProvider)}"
-      speechModel="${escapeXml(speechModel)}"
+      transcriptionProvider="Deepgram"
+      speechModel="nova-2-general"
       ttsLanguage="zh-CN"
-      ttsProvider="${escapeXml(ttsProvider)}"
-      voice="${escapeXml(voice)}"
-      speechTimeout="${escapeXml(speechTimeoutMs)}"
+      ttsProvider="Amazon"
+      voice="Zhiyu-Neural"
+      speechTimeout="900"
       interruptible="speech"
       reportInputDuringAgentSpeech="speech"
       welcomeGreetingInterruptible="speech">
@@ -420,13 +407,10 @@ export function buildServer({
   welcomeInterruptDelayMs = 1200,
   llmFirstTokenTimeoutMs = Number(process.env.LLM_FIRST_TOKEN_TIMEOUT_MS) || 10000,
   queueIntervalSeconds = DEFAULT_QUEUE_INTERVAL_SECONDS,
-  wsUrl = WS_URL,
-  baseUrl = BASE_URL,
 } = {}) {
   const fastify = Fastify({ logger: false });
   const jobs = new Map();
   const callContexts = new Map();
-  const latencySamples = [];
   fastify.register(fastifyFormBody);
   fastify.register(fastifyWebsocket);
 
@@ -686,34 +670,9 @@ export function buildServer({
   fastify.get("/health", async () => ({
     ok: true,
     mode: "conversation-relay",
-    websocket: Boolean(wsUrl),
+    websocket: Boolean(WS_URL),
     dashboard: true,
-    voiceProfile: {
-      transcriptionProvider: DEFAULT_TRANSCRIPTION_PROVIDER,
-      speechModel: DEFAULT_SPEECH_MODEL,
-      ttsProvider: DEFAULT_TTS_PROVIDER,
-      voice: DEFAULT_TTS_VOICE,
-      speechTimeoutMs: DEFAULT_SPEECH_TIMEOUT_MS,
-    },
   }));
-
-  fastify.get("/api/metrics", async (request, reply) => {
-    if (!requireDashboard(request, reply)) return;
-    const recent = latencySamples.slice(-100);
-    const average = (field) => {
-      const values = recent.map((item) => item[field]).filter(Number.isFinite);
-      return values.length
-        ? Math.round(values.reduce((sum, value) => sum + value, 0) / values.length)
-        : null;
-    };
-    return {
-      samples: recent.length,
-      targetFirstTokenMs: 1200,
-      averageFirstTokenMs: average("firstTokenMs"),
-      averageTotalMs: average("totalMs"),
-      recent,
-    };
-  });
 
   fastify.get("/logs", async (_request, reply) => {
     try {
@@ -744,12 +703,7 @@ export function buildServer({
         : WELCOME_GREETING;
       return reply
         .type("text/xml")
-        .send(
-          conversationRelayTwiml(`${wsUrl}${wsQuery}`, {
-            welcomeGreeting: greeting,
-            baseUrl,
-          }),
-        );
+        .send(conversationRelayTwiml(`${WS_URL}${wsQuery}`, { welcomeGreeting: greeting }));
     } catch (error) {
       log("❌ TwiML:", error.message);
       return reply.status(500).type("text/plain").send(error.message);
@@ -916,13 +870,6 @@ export function buildServer({
               if (controller.signal.aborted) return;
               clearTimeout(firstTokenTimer);
               conversation.push({ role: "assistant", content: answer });
-              latencySamples.push({
-                callSid,
-                at: new Date().toISOString(),
-                firstTokenMs: firstTokenAt ? firstTokenAt - startedAt : null,
-                totalMs: Date.now() - startedAt,
-              });
-              if (latencySamples.length > 500) latencySamples.splice(0, latencySamples.length - 500);
               log("🤖 AI:", answer, `总耗时=${Date.now() - startedAt}ms`);
             } catch (error) {
               if (timedOut) {

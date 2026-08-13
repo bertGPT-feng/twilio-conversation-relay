@@ -1,0 +1,31 @@
+TARGET: bertGPT-feng/twilio-conversation-relay
+BRANCH: main
+CHANGED_FIELD: ConversationRelay speechModel="nova-2-general" -> speechModel="flux"; speechTimeout="900" -> "700"; configurable STT/TTS; protected /api/metrics latency telemetry.
+ORIGINAL_COMMIT: 5709b509ecaee5c4e4ac01f2047adda7dbeb1106
+ORIGINAL_SHA256: 61ed2dc24980c4528a3a75bd2036882d47ece1264bc96d4fa188c417dce5cc25
+MODIFIED_SHA256: 04fc1fcc9ab51826137711c451a1257c4534bca24f6b50aaad22d6adee722b8e
+
+ARTIFACTS:
+MODIFIED_FILE=/Users/shenmiren/Documents/Codex/2026-08-14/twilio-developer-kit-plugin-twilio-developer/conversation-relay/artifacts/MODIFIED_FILE.server.js
+DIFF_FILE=/Users/shenmiren/Documents/Codex/2026-08-14/twilio-developer-kit-plugin-twilio-developer/conversation-relay/artifacts/DIFF_FILE.patch
+VERIFICATION=/Users/shenmiren/Documents/Codex/2026-08-14/twilio-developer-kit-plugin-twilio-developer/conversation-relay/artifacts/VERIFICATION.txt
+ROLLBACK=/Users/shenmiren/Documents/Codex/2026-08-14/twilio-developer-kit-plugin-twilio-developer/conversation-relay/artifacts/ROLLBACK.sh
+
+BASELINE:
+COMMAND=/Users/shenmiren/.nvm/versions/node/v22.23.1/bin/node --test --test-force-exit
+INPUT=original commit 5709b509ecaee5c4e4ac01f2047adda7dbeb1106
+LITERAL_RESULT=# tests 25; # pass 24; # fail 1; voice route expected 200 but received 500 because DOMAIN was absent
+EXIT_STATUS=1
+
+MODIFIED:
+COMMAND=/Users/shenmiren/.nvm/versions/node/v22.23.1/bin/node --check server.js && /Users/shenmiren/.nvm/versions/node/v22.23.1/bin/node --test --test-force-exit
+INPUT=modified main working tree
+LITERAL_RESULT=# tests 27; # pass 27; # fail 0; duration_ms 255.007083; MODIFIED_EXIT=0
+EXIT_STATUS=0
+
+ROLLBACK:
+COMMAND=./artifacts/ROLLBACK.sh && /Users/shenmiren/.nvm/versions/node/v22.23.1/bin/node --test --test-force-exit
+INPUT=independent copy /tmp/conversation-relay-rollback.MEO4hc/repo
+LITERAL_RESULT=ROLLBACK_RESULT=restored original tracked files; RESTORED_SHA256=61ed2dc24980c4528a3a75bd2036882d47ece1264bc96d4fa188c417dce5cc25; # tests 25; # pass 24; # fail 1
+EXIT_STATUS=rollback script 0; restored baseline test 1
+RESTORED_BEHAVIOR_STATUS=original server.js hash restored exactly; original voice-route-without-DOMAIN failure restored.

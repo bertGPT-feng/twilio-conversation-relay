@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { buildServer, conversationRelayTwiml, SYSTEM_PROMPT } from "./server.js";
 
-test("generates Chinese ConversationRelay TwiML without ElevenLabs", () => {
+test("generates the low-latency Chinese ConversationRelay profile", () => {
   const xml = conversationRelayTwiml("wss://relay.example.test/ws");
   assert.match(xml, /url="wss:\/\/relay\.example\.test\/ws"/);
   assert.match(xml, /language="zh-CN"/);
   assert.match(xml, /transcriptionProvider="Deepgram"/);
-  assert.match(xml, /speechModel="nova-2-general"/);
+  assert.match(xml, /speechModel="flux"/);
   assert.match(xml, /ttsProvider="Amazon"/);
   assert.match(xml, /voice="Zhiyu-Neural"/);
   assert.doesNotMatch(xml, /ElevenLabs/i);
@@ -185,11 +185,32 @@ test("dashboard queue starts one Twilio call with dynamic contact context", asyn
 });
 
 test("voice route returns ConversationRelay TwiML", async () => {
-  const app = buildServer({ openai: null });
+  const app = buildServer({
+    openai: null,
+    wsUrl: "wss://relay.example.test/ws",
+    baseUrl: "https://relay.example.test",
+  });
   const response = await app.inject({ method: "POST", url: "/voice" });
   assert.equal(response.statusCode, 200);
   assert.match(response.headers["content-type"], /^text\/xml/);
   assert.match(response.body, /<ConversationRelay/);
+  await app.close();
+});
+
+test("health exposes the active latency-optimized voice profile", async () => {
+  const app = buildServer({ openai: null });
+  const response = await app.inject({ method: "GET", url: "/health" });
+  assert.equal(response.json().voiceProfile.speechModel, "flux");
+  assert.equal(response.json().voiceProfile.speechTimeoutMs, 700);
+  await app.close();
+});
+
+test("metrics endpoint reports streaming first-token latency", async () => {
+  const app = buildServer({ openai: null });
+  const response = await app.inject({ method: "GET", url: "/api/metrics" });
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().targetFirstTokenMs, 1200);
+  assert.equal(response.json().samples, 0);
   await app.close();
 });
 

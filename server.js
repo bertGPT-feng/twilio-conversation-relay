@@ -27,8 +27,12 @@ const PUBLIC_DIR = new URL("./public/", import.meta.url);
 const FFLATE_BROWSER_FILE = new URL("./node_modules/fflate/umd/index.js", import.meta.url);
 const DEFAULT_QUEUE_INTERVAL_SECONDS = 8;
 const DEFAULT_TRANSCRIPTION_PROVIDER = process.env.TWILIO_STT_PROVIDER || "Deepgram";
-// Flux currently rejects zh-CN on this Twilio account (64101); Nova 2 supports it.
-const DEFAULT_SPEECH_MODEL = process.env.TWILIO_SPEECH_MODEL || "nova-2-general";
+// Flux currently rejects zh-CN on this Twilio account (64101); force the supported fallback.
+const REQUESTED_SPEECH_MODEL = process.env.TWILIO_SPEECH_MODEL || "nova-2-general";
+const DEFAULT_SPEECH_MODEL =
+  REQUESTED_SPEECH_MODEL.toLowerCase() === "flux"
+    ? "nova-2-general"
+    : REQUESTED_SPEECH_MODEL;
 const DEFAULT_TTS_PROVIDER = process.env.TWILIO_TTS_PROVIDER || "Amazon";
 const DEFAULT_TTS_VOICE = process.env.TWILIO_TTS_VOICE || "Zhiyu-Neural";
 const DEFAULT_SPEECH_TIMEOUT_MS = Number(process.env.TWILIO_SPEECH_TIMEOUT_MS) || 700;

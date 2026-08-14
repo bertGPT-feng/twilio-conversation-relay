@@ -7,7 +7,7 @@ test("generates the low-latency Chinese ConversationRelay profile", () => {
   assert.match(xml, /url="wss:\/\/relay\.example\.test\/ws"/);
   assert.match(xml, /language="zh-CN"/);
   assert.match(xml, /transcriptionProvider="Deepgram"/);
-  assert.match(xml, /speechModel="flux"/);
+  assert.match(xml, /speechModel="nova-2-general"/);
   assert.match(xml, /ttsProvider="Amazon"/);
   assert.match(xml, /voice="Zhiyu-Neural"/);
   assert.doesNotMatch(xml, /ElevenLabs/i);
@@ -200,7 +200,7 @@ test("voice route returns ConversationRelay TwiML", async () => {
 test("health exposes the active latency-optimized voice profile", async () => {
   const app = buildServer({ openai: null });
   const response = await app.inject({ method: "GET", url: "/health" });
-  assert.equal(response.json().voiceProfile.speechModel, "flux");
+  assert.equal(response.json().voiceProfile.speechModel, "nova-2-general");
   assert.equal(response.json().voiceProfile.speechTimeoutMs, 700);
   await app.close();
 });

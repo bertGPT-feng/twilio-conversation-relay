@@ -11,7 +11,7 @@ import {
 
 test("TwiML enables fast turn detection and speech interruption", () => {
   const xml = conversationRelayTwiml("wss://relay.example.test/ws");
-  assert.match(xml, /speechModel="flux"/);
+  assert.match(xml, /speechModel="nova-2-general"/);
   assert.match(xml, /speechTimeout="700"/);
   assert.match(xml, /interruptible="speech"/);
   assert.match(xml, /reportInputDuringAgentSpeech="speech"/);

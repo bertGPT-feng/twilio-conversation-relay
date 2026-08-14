@@ -12,7 +12,7 @@
 - 显示排队、响铃、通话中、完成、占线、无人接听和失败状态
 - 每批拨号前确认完整号码范围和联系人授权
 - Railway 生产环境必须配置管理密码
-- Deepgram Flux 语义轮次检测，默认 700ms 结束语音等待
+- Deepgram Nova 2 中文识别，默认 700ms 结束语音等待
 - LLM 完整短句流式发送，支持用户插话后取消旧回答
 - `/api/metrics` 提供最近 100 次模型首 Token 与总响应耗时
 
@@ -44,7 +44,7 @@ git push -u origin main
 | `TWILIO_ACCOUNT_SID` | Twilio Account SID |
 | `TWILIO_AUTH_TOKEN` | Twilio Auth Token |
 | `TWILIO_PHONE_NUMBER` | Twilio 外呼号码，E.164 格式 |
-| `TWILIO_SPEECH_MODEL` | 推荐 `flux`；若账号暂未开放可回退 `nova-2-general` |
+| `TWILIO_SPEECH_MODEL` | 中文通话使用 `nova-2-general`；Flux 与 zh-CN 组合可能返回 64101 |
 | `TWILIO_SPEECH_TIMEOUT_MS` | 默认 `700`，可按用户语速调至 `500`–`1200` |
 | `TWILIO_TTS_PROVIDER` | 默认 `Amazon`，也可测试 `Google` 或已开通的 `ElevenLabs` |
 | `TWILIO_TTS_VOICE` | 必须与 TTS 提供商及中文语言匹配 |

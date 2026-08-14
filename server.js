@@ -145,13 +145,22 @@ export function identityResponseFor(input, callContext = null) {
   const text = String(input || "")
     .replace(/[\s，。！？,.!?]/g, "")
     .trim();
-  if (/^(不是|不对|打错|你找错|不是本人)/.test(text)) {
+  const normalized = text.toLowerCase();
+  if (/^(不是|不对|打错|你找错|不是本人)|并?不是|我不是/.test(normalized)) {
     return {
       confirmed: false,
       text: "抱歉，可能是我们联系错了。为保护信息安全，我不会继续说明，打扰您了，再见。",
     };
   }
-  if (/^(是的|是啊|对的|对|没错|本人|我就是|嗯|是)$/.test(text) || /^(是的|是啊|对的|我就是)/.test(text)) {
+  const confirmsIdentity =
+    /^(yes|yeah|yep|是|是的|是啊|是呀|是带|是得|对|对的|没错|本人|嗯)$/.test(
+      normalized,
+    ) ||
+    /^(对|是的|是啊|是呀).*(我就是|是我|本人)/.test(normalized) ||
+    /我(是|就是).*(来电)?本[人源]/.test(normalized) ||
+    /来电本[人源].*(是我|就是我)/.test(normalized) ||
+    /^(我就是|就是我|对我就是)/.test(normalized);
+  if (confirmsIdentity) {
     if (callContext?.name) {
       return {
         confirmed: true,

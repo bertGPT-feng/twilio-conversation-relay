@@ -34,6 +34,19 @@ test("unclear identity reply asks once more without disclosing case details", ()
   assert.doesNotMatch(response.text, /案号|判决书/);
 });
 
+test("accepts common Chinese and English identity confirmations from phone ASR", () => {
+  for (const phrase of [
+    "对，我就是",
+    "我是来电本人",
+    "我是来电本源",
+    "YES",
+    "是带",
+  ]) {
+    assert.equal(identityResponseFor(phrase).confirmed, true, phrase);
+  }
+  assert.equal(identityResponseFor("我不是本人").confirmed, false);
+});
+
 test("common delivery intents are answered locally without the LLM", () => {
   assert.match(localResponseFor("方便"), /送达/);
   assert.match(localResponseFor("这是什么东西"), /民事判决书/);
